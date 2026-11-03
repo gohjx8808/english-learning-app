@@ -17,6 +17,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { speakText, evaluateSpokenSentence } from '../services/speech';
+import { TTSButton } from './TTSButton';
 
 interface SpeakingViewProps {
   items: SpeakingItem[];
@@ -329,21 +330,29 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
               <span className="text-xs font-semibold text-sky-700 bg-sky-50 px-2.5 py-1 rounded-lg">
                 Context: {currentItem.context}
               </span>
-              <button
-                onClick={() => handlePronounce(currentItem.en)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 text-sky-700 hover:bg-sky-500 hover:text-white transition-all text-xs font-semibold cursor-pointer"
-                title="Listen to native model pronunciation"
-              >
-                <Volume2 className="w-4 h-4" />
-                <span>Listen (听示范)</span>
-              </button>
+              <TTSButton
+                text={currentItem.en}
+                size="md"
+                variant="subtle"
+                showLabel
+                label="Listen to Teacher"
+                title="Listen to teacher model pronunciation"
+              />
             </div>
 
             {/* Target English Sentence */}
             <div className="space-y-2 py-2">
-              <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug">
-                {currentItem.en}
-              </h2>
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug flex-1">
+                  {currentItem.en}
+                </h2>
+                <TTSButton
+                  text={currentItem.en}
+                  size="md"
+                  variant="subtle"
+                  title="Listen to sentence"
+                />
+              </div>
               <p className="text-xs sm:text-sm font-mono text-slate-400">
                 {currentItem.ipa}
               </p>
@@ -354,9 +363,17 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
 
             {/* Pronunciation & Rhythm Tip */}
             <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100 text-xs text-slate-600 space-y-1">
-              <div className="flex items-center gap-1.5 font-semibold text-slate-800">
-                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                <span>Pronunciation & Stress Tip</span>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-slate-800">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Pronunciation & Stress Tip</span>
+                </div>
+                <TTSButton
+                  text={currentItem.tips}
+                  size="xs"
+                  variant="ghost"
+                  title="Listen to tips"
+                />
               </div>
               <p className="leading-relaxed">{currentItem.tips}</p>
             </div>

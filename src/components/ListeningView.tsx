@@ -30,6 +30,7 @@ import {
   NATURAL_VOICE_OPTIONS 
 } from '../services/speech';
 import { saveAudioFile, getAudioFile } from '../services/storage';
+import { TTSButton } from './TTSButton';
 
 interface ListeningViewProps {
   lessons: ListeningLesson[];
@@ -925,13 +926,12 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-slate-900">{vocab.word}</span>
-                        <button
-                          onClick={() => playNaturalVoice(vocab.word, { voiceId: activeVoiceId })}
-                          className="p-1 text-slate-400 hover:text-sky-600 cursor-pointer"
+                        <TTSButton
+                          text={vocab.word}
+                          size="xs"
+                          variant="ghost"
                           title="Pronounce word"
-                        >
-                          <Volume2 className="w-3.5 h-3.5" />
-                        </button>
+                        />
                       </div>
                       <p className="text-slate-600 mt-1">{vocab.meaningZh}</p>
                     </div>

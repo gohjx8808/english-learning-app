@@ -14,6 +14,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import { speakText, playSound } from '../services/speech';
+import { TTSButton } from './TTSButton';
 import confetti from 'canvas-confetti';
 
 interface ReadingViewProps {
@@ -206,7 +207,15 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
                 </p>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <TTSButton
+                  text={activePassage.paragraphs.map((p) => p.en).join(' ')}
+                  size="sm"
+                  variant="subtle"
+                  isParagraph
+                  showLabel
+                  label="Listen Full Passage"
+                />
                 <button
                   onClick={() => setShowChinese(!showChinese)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
@@ -220,10 +229,21 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
             {/* Paragraphs */}
             <div className="space-y-6">
               {activePassage.paragraphs.map((para, i) => (
-                <div key={i} className="space-y-2">
-                  <p className="text-slate-800 text-base sm:text-lg leading-relaxed font-normal">
-                    {renderParagraphWithHighlights(para.en)}
-                  </p>
+                <div key={i} className="space-y-2 group/para relative">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-slate-800 text-base sm:text-lg leading-relaxed font-normal flex-1">
+                      {renderParagraphWithHighlights(para.en)}
+                    </p>
+                    <div className="shrink-0 pt-0.5">
+                      <TTSButton
+                        text={para.en}
+                        size="xs"
+                        variant="ghost"
+                        isParagraph
+                        title={`Listen to Paragraph ${i + 1}`}
+                      />
+                    </div>
+                  </div>
                   {showChinese && (
                     <p className="text-xs sm:text-sm text-slate-500 leading-relaxed bg-slate-50/70 p-3 rounded-xl border border-slate-100/80">
                       {para.zh}
@@ -273,9 +293,17 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
                     className="p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80 space-y-3"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <p className="text-sm font-bold text-slate-900">
-                        {qIndex + 1}. {q.question}
-                      </p>
+                      <div className="flex items-start gap-2 flex-1">
+                        <p className="text-sm font-bold text-slate-900">
+                          {qIndex + 1}. {q.question}
+                        </p>
+                        <TTSButton
+                          text={q.question}
+                          size="xs"
+                          variant="ghost"
+                          title="Listen to question"
+                        />
+                      </div>
                       {answered && (
                         <div>
                           {isCorrect ? (
@@ -309,25 +337,41 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
                         }
 
                         return (
-                          <button
+                          <div
                             key={optIndex}
-                            disabled={answered}
-                            onClick={() => handleSelectOption(q.id, optIndex)}
-                            className={`w-full p-3 rounded-xl border text-left text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-between ${btnStyle}`}
+                            className={`w-full p-3 rounded-xl border text-xs sm:text-sm transition-all flex items-center justify-between ${btnStyle}`}
                           >
-                            <span>{opt}</span>
-                            {answered && optIndex === q.correctAnswerIndex && (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            )}
-                          </button>
+                            <button
+                              type="button"
+                              disabled={answered}
+                              onClick={() => handleSelectOption(q.id, optIndex)}
+                              className="flex-1 text-left cursor-pointer"
+                            >
+                              <span>{opt}</span>
+                            </button>
+                            <div className="flex items-center gap-1 shrink-0 ml-2">
+                              <TTSButton text={opt} size="xs" variant="minimal" title={`Listen to ${opt}`} />
+                              {answered && optIndex === q.correctAnswerIndex && (
+                                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              )}
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
 
                     {answered && (
-                      <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-600 animate-in fade-in duration-150">
-                        <span className="font-semibold text-slate-800">Explanation: </span>
-                        {q.explanation}
+                      <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-600 animate-in fade-in duration-150 flex items-start justify-between gap-2">
+                        <div>
+                          <span className="font-semibold text-slate-800">Explanation: </span>
+                          {q.explanation}
+                        </div>
+                        <TTSButton
+                          text={q.explanation}
+                          size="xs"
+                          variant="ghost"
+                          title="Listen to explanation"
+                        />
                       </div>
                     )}
                   </div>
@@ -391,13 +435,12 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
                   <h4 className="text-2xl font-bold text-slate-900">
                     {inspectedWord.word}
                   </h4>
-                  <button
-                    onClick={() => handlePronounce(inspectedWord.word)}
-                    className="p-1.5 text-sky-700 hover:bg-sky-100 rounded-lg transition-colors cursor-pointer"
-                    title="Pronounce"
-                  >
-                    <Volume2 className="w-4 h-4" />
-                  </button>
+                  <TTSButton
+                    text={inspectedWord.word}
+                    size="md"
+                    variant="subtle"
+                    title="Pronounce word"
+                  />
                 </div>
                 <p className="text-xs font-mono text-slate-500 mt-0.5">
                   {inspectedWord.phonetic} · {inspectedWord.pos}
@@ -432,15 +475,12 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
                     </div>
                     <p className="text-xs text-slate-600 mt-0.5">{vocab.meaningZh}</p>
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handlePronounce(vocab.word);
-                    }}
-                    className="p-1 text-slate-400 hover:text-sky-600 cursor-pointer"
-                  >
-                    <Volume2 className="w-3.5 h-3.5" />
-                  </button>
+                  <TTSButton
+                    text={vocab.word}
+                    size="xs"
+                    variant="ghost"
+                    title={`Listen to ${vocab.word}`}
+                  />
                 </div>
               ))}
             </div>

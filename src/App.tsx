@@ -24,6 +24,9 @@ import { ReadingView } from './components/ReadingView';
 import { SpeakingView } from './components/SpeakingView';
 import { ProgressView } from './components/ProgressView';
 import { SettingsView } from './components/SettingsView';
+import { TTSProvider } from './context/TTSContext';
+import { GlobalTTSPlayer } from './components/GlobalTTSPlayer';
+import { UserSettings } from './types';
 
 const CUSTOM_LESSONS_KEY = 'my_english_custom_lessons_v1';
 
@@ -102,6 +105,17 @@ export default function App() {
     setIsTimerRunning(!isTimerRunning);
   };
 
+  const handleUpdateUserSettings = (updatedSettings: Partial<UserSettings>) => {
+    const updated = {
+      ...progress,
+      settings: {
+        ...progress.settings,
+        ...updatedSettings,
+      },
+    };
+    handleUpdateProgress(updated);
+  };
+
   const handleResetProgress = () => {
     const reset = { ...DEFAULT_PROGRESS, settings: progress.settings };
     setProgress(reset);
@@ -109,121 +123,126 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800">
-      
-      {/* Strict 3-zone Top Bar */}
-      <Navbar
-        currentTab={currentTab}
-        onSelectTab={setCurrentTab}
-        streak={progress.streak}
-        todaySeconds={progress.todayStudySeconds}
-        goalMinutes={progress.settings.dailyGoalMinutes}
-        isTimerRunning={isTimerRunning}
-        onToggleTimer={handleToggleTimer}
-      />
-
-      {/* Main Content Container with Desktop Baseline */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+    <TTSProvider userSettings={progress.settings} onUpdateUserSettings={handleUpdateUserSettings}>
+      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800">
         
-        {currentTab === 'dashboard' && (
-          <DashboardView
-            progress={progress}
-            totalWordsCount={VOCABULARY_LIST.length}
-            onNavigate={setCurrentTab}
-            onToggleTimer={handleToggleTimer}
-            isTimerRunning={isTimerRunning}
-          />
-        )}
+        {/* Strict 3-zone Top Bar */}
+        <Navbar
+          currentTab={currentTab}
+          onSelectTab={setCurrentTab}
+          streak={progress.streak}
+          todaySeconds={progress.todayStudySeconds}
+          goalMinutes={progress.settings.dailyGoalMinutes}
+          isTimerRunning={isTimerRunning}
+          onToggleTimer={handleToggleTimer}
+        />
 
-        {currentTab === 'vocabulary' && (
-          <VocabularyView
-            vocabulary={VOCABULARY_LIST}
-            progress={progress}
-            onUpdateProgress={handleUpdateProgress}
-            onLogActivity={handleLogActivity}
-          />
-        )}
+        {/* Main Content Container with Desktop Baseline */}
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+          
+          {currentTab === 'dashboard' && (
+            <DashboardView
+              progress={progress}
+              totalWordsCount={VOCABULARY_LIST.length}
+              onNavigate={setCurrentTab}
+              onToggleTimer={handleToggleTimer}
+              isTimerRunning={isTimerRunning}
+            />
+          )}
 
-        {currentTab === 'listening' && (
-          <ListeningView
-            lessons={listeningLessons}
-            onUpdateLessons={handleUpdateListeningLessons}
-            progress={progress}
-            onUpdateProgress={handleUpdateProgress}
-            onLogActivity={handleLogActivity}
-          />
-        )}
+          {currentTab === 'vocabulary' && (
+            <VocabularyView
+              vocabulary={VOCABULARY_LIST}
+              progress={progress}
+              onUpdateProgress={handleUpdateProgress}
+              onLogActivity={handleLogActivity}
+            />
+          )}
 
-        {currentTab === 'grammar' && (
-          <GrammarView
-            lessons={GRAMMAR_LESSONS}
-            progress={progress}
-            onUpdateProgress={handleUpdateProgress}
-            onLogActivity={handleLogActivity}
-          />
-        )}
+          {currentTab === 'listening' && (
+            <ListeningView
+              lessons={listeningLessons}
+              onUpdateLessons={handleUpdateListeningLessons}
+              progress={progress}
+              onUpdateProgress={handleUpdateProgress}
+              onLogActivity={handleLogActivity}
+            />
+          )}
 
-        {currentTab === 'reading' && (
-          <ReadingView
-            passages={READING_PASSAGES}
-            progress={progress}
-            onUpdateProgress={handleUpdateProgress}
-            onLogActivity={handleLogActivity}
-          />
-        )}
+          {currentTab === 'grammar' && (
+            <GrammarView
+              lessons={GRAMMAR_LESSONS}
+              progress={progress}
+              onUpdateProgress={handleUpdateProgress}
+              onLogActivity={handleLogActivity}
+            />
+          )}
 
-        {currentTab === 'speaking' && (
-          <SpeakingView
-            items={SPEAKING_ITEMS}
-            progress={progress}
-            onUpdateProgress={handleUpdateProgress}
-            onLogActivity={handleLogActivity}
-          />
-        )}
+          {currentTab === 'reading' && (
+            <ReadingView
+              passages={READING_PASSAGES}
+              progress={progress}
+              onUpdateProgress={handleUpdateProgress}
+              onLogActivity={handleLogActivity}
+            />
+          )}
 
-        {currentTab === 'progress' && (
-          <ProgressView
-            progress={progress}
-            totalWordsCount={VOCABULARY_LIST.length}
-            totalGrammarCount={GRAMMAR_LESSONS.length}
-            totalReadingCount={READING_PASSAGES.length}
-            totalListeningCount={listeningLessons.length}
-            onResetProgress={handleResetProgress}
-            onLogActivity={handleLogActivity}
-          />
-        )}
+          {currentTab === 'speaking' && (
+            <SpeakingView
+              items={SPEAKING_ITEMS}
+              progress={progress}
+              onUpdateProgress={handleUpdateProgress}
+              onLogActivity={handleLogActivity}
+            />
+          )}
 
-        {currentTab === 'settings' && (
-          <SettingsView
-            progress={progress}
-            onUpdateProgress={handleUpdateProgress}
-            onLogActivity={handleLogActivity}
-          />
-        )}
+          {currentTab === 'progress' && (
+            <ProgressView
+              progress={progress}
+              totalWordsCount={VOCABULARY_LIST.length}
+              totalGrammarCount={GRAMMAR_LESSONS.length}
+              totalReadingCount={READING_PASSAGES.length}
+              totalListeningCount={listeningLessons.length}
+              onResetProgress={handleResetProgress}
+              onLogActivity={handleLogActivity}
+            />
+          )}
 
-      </main>
+          {currentTab === 'settings' && (
+            <SettingsView
+              progress={progress}
+              onUpdateProgress={handleUpdateProgress}
+              onLogActivity={handleLogActivity}
+            />
+          )}
 
-      {/* Quiet Footer */}
-      <footer className="mt-auto border-t border-slate-200/80 bg-white py-6">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
-          <div>
-            <span className="font-semibold text-slate-700">My English</span> · Personal English Learning Platform (CEFR A2 → B1)
+        </main>
+
+        {/* Quiet Footer */}
+        <footer className="mt-auto border-t border-slate-200/80 bg-white py-6">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+            <div>
+              <span className="font-semibold text-slate-700">My English</span> · Personal English Learning Platform (CEFR A2 → B1)
+            </div>
+            <div className="flex items-center gap-4 text-slate-400">
+              <span>15–30 min Daily Habit</span>
+              <span aria-hidden="true">·</span>
+              <span>Bilingual Support (简体中文)</span>
+              <span aria-hidden="true">·</span>
+              <button
+                onClick={() => setCurrentTab('settings')}
+                className="hover:text-slate-600 cursor-pointer"
+              >
+                Preferences
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-4 text-slate-400">
-            <span>15–30 min Daily Habit</span>
-            <span aria-hidden="true">·</span>
-            <span>Bilingual Support (简体中文)</span>
-            <span aria-hidden="true">·</span>
-            <button
-              onClick={() => setCurrentTab('settings')}
-              className="hover:text-slate-600 cursor-pointer"
-            >
-              Preferences
-            </button>
-          </div>
-        </div>
-      </footer>
+        </footer>
 
-    </div>
+        {/* Global Floating Natural TTS Player */}
+        <GlobalTTSPlayer />
+
+      </div>
+    </TTSProvider>
   );
 }

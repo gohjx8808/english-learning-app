@@ -1,10 +1,32 @@
 /**
- * High-Quality Natural Voice Speech Engine & Audio Services
- * Integrates Gemini Neural TTS via server-side /api/tts with intelligent caching,
- * pitch-preserving speed controls, and seamless Web Speech API fallback.
+ * High-Quality Natural Voice Speech Engine & Centralized Audio Services
+ * Integrates Gemini Neural TTS via server-side /api/tts with:
+ * - Persistent IndexedDB caching (never re-fetch spoken audio across page reloads)
+ * - Safe 21-second request queue enforcing Gemini Free-Tier 3 RPM limits
+ * - Deduplication for simultaneous requests
+ * - Smart paragraph chunking and sentence cache reuse
+ * - Premium browser natural system voice detection as high-quality fallback
+ * - Live playback state subscriptions and sound effects
  */
 
 import { VoiceProfileId } from '../types';
+import { 
+  buildAudioCacheKey, 
+  getAudioFromCache, 
+  saveAudioToCache,
+  getCacheStats,
+  clearAllAudioCache
+} from './ttsCache';
+import { 
+  enqueueTTSRequest, 
+  bypassQueueToBrowserFallback,
+  getTTSQueueState,
+  subscribeTTSQueue,
+  TTSQueueState
+} from './ttsQueue';
+
+export { getCacheStats, clearAllAudioCache, getTTSQueueState, subscribeTTSQueue };
+export type { TTSQueueState };
 
 export interface NaturalVoiceOption {
   id: VoiceProfileId;
@@ -65,6 +87,8 @@ export interface PlaybackOptions {
   speed?: number; // 0.75, 1.0, 1.25, 1.5
   accent?: 'en-US' | 'en-GB';
   voiceGender?: 'female' | 'male';
+  forceBrowserFallback?: boolean;
+  allowFallbackIfWaiting?: boolean;
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (err: unknown) => void;
@@ -72,43 +96,164 @@ export interface PlaybackOptions {
   onResume?: () => void;
 }
 
-// Client-side in-memory Audio Cache
-const clientAudioCache = new Map<string, string>();
+export type PlaybackSource = 'gemini' | 'cached' | 'fallback';
+
+export interface ActivePlaybackState {
+  currentText: string | null;
+  activeSentence: string | null;
+  isPlaying: boolean;
+  isPaused: boolean;
+  isLoading: boolean;
+  speed: number;
+  voiceId: VoiceProfileId;
+  totalSentences: number;
+  currentSentenceIndex: number;
+  source: PlaybackSource;
+}
+
+// Global Playback State
+let globalPlaybackState: ActivePlaybackState = {
+  currentText: null,
+  activeSentence: null,
+  isPlaying: false,
+  isPaused: false,
+  isLoading: false,
+  speed: 1.0,
+  voiceId: 'us-female',
+  totalSentences: 0,
+  currentSentenceIndex: 0,
+  source: 'gemini',
+};
+
+const stateListeners = new Set<(state: ActivePlaybackState) => void>();
+
+function notifyStateChange(updates?: Partial<ActivePlaybackState>) {
+  if (updates) {
+    globalPlaybackState = { ...globalPlaybackState, ...updates };
+  }
+  stateListeners.forEach((listener) => {
+    try {
+      listener(globalPlaybackState);
+    } catch (e) {
+      console.warn('Playback listener error', e);
+    }
+  });
+}
+
+export function subscribePlaybackState(listener: (state: ActivePlaybackState) => void): () => void {
+  stateListeners.add(listener);
+  listener(globalPlaybackState);
+  return () => {
+    stateListeners.delete(listener);
+  };
+}
+
+export function getPlaybackState(): ActivePlaybackState {
+  return globalPlaybackState;
+}
+
+export function setGlobalPlaybackSpeed(speed: number): void {
+  globalPlaybackState.speed = speed;
+  if (currentAudio) {
+    currentAudio.playbackRate = speed;
+  }
+  notifyStateChange({ speed });
+}
+
+export function setGlobalPlaybackVoice(voiceId: VoiceProfileId): void {
+  globalPlaybackState.voiceId = voiceId;
+  notifyStateChange({ voiceId });
+}
+
+/**
+ * Strips Chinese characters, Chinese punctuation, and bracketed translations
+ * so that only English content is read aloud by the TTS engine.
+ */
+export function extractEnglishOnly(text: string): string {
+  if (!text) return '';
+  // 1. Remove parenthesized/bracketed Chinese explanations: e.g. (苹果), （苹果）, [苹果]
+  let cleaned = text.replace(/[\(（\[][^\)）\]]*[\u4e00-\u9fa5]+[^\)）\]]*[\)）\]]/g, '');
+  // 2. Remove remaining Chinese characters and Chinese punctuation symbols
+  cleaned = cleaned.replace(/[\u4e00-\u9fa5\u3000-\u303f\uff01-\uff5e]/g, ' ');
+  // 3. Remove orphaned or empty parentheses
+  cleaned = cleaned.replace(/[\(（\[]\s*[\)）\]]/g, ' ');
+  // 4. Normalize whitespaces
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  // If entire string was non-English and was emptied, fall back to trimmed original
+  return cleaned || text.trim();
+}
+
+/**
+ * Splits long paragraphs or passages into individual natural sentences (. ! ?)
+ */
+export function splitIntoSentences(text: string): string[] {
+  const english = extractEnglishOnly(text);
+  if (!english) return [];
+  // Split on sentence terminators while preserving them
+  const regex = /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g;
+  const matches = english.match(regex);
+  if (!matches) return [english];
+  return matches.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+// Client-side in-memory Audio Cache (quick URL lookups)
+const memoryAudioCache = new Map<string, string>();
 
 // Global Active Audio Player Instance
 let currentAudio: HTMLAudioElement | null = null;
 let currentAbortController: AbortController | null = null;
-let isSyntheticSpeaking = false;
+let activeSequenceToken = 0; // For aborting multi-sentence sequences
 
 export function stopCurrentAudio(): void {
+  activeSequenceToken++; // Invalidate any running sequence
+  
   if (currentAudio) {
-    currentAudio.pause();
-    currentAudio.currentTime = 0;
+    try {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+    } catch {}
     currentAudio = null;
   }
   if (currentAbortController) {
-    currentAbortController.abort();
+    try {
+      currentAbortController.abort();
+    } catch {}
     currentAbortController = null;
   }
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
+    try {
+      window.speechSynthesis.cancel();
+    } catch {}
   }
-  isSyntheticSpeaking = false;
+
+  notifyStateChange({
+    isPlaying: false,
+    isPaused: false,
+    isLoading: false,
+    activeSentence: null,
+    totalSentences: 0,
+    currentSentenceIndex: 0,
+  });
 }
 
 export function pauseCurrentAudio(): void {
   if (currentAudio && !currentAudio.paused) {
     currentAudio.pause();
+    notifyStateChange({ isPlaying: false, isPaused: true });
   } else if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking) {
     window.speechSynthesis.pause();
+    notifyStateChange({ isPlaying: false, isPaused: true });
   }
 }
 
 export function resumeCurrentAudio(): void {
   if (currentAudio && currentAudio.paused) {
-    currentAudio.play().catch(console.warn);
+    currentAudio.play().then(() => {
+      notifyStateChange({ isPlaying: true, isPaused: false });
+    }).catch(console.warn);
   } else if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.paused) {
     window.speechSynthesis.resume();
+    notifyStateChange({ isPlaying: true, isPaused: false });
   }
 }
 
@@ -125,62 +270,113 @@ export function isAudioPaused(): boolean {
 }
 
 /**
- * High-Quality Natural Voice Player
- * Tries server-side Gemini TTS first; automatically falls back to browser SpeechSynthesis.
+ * High-Quality Natural Voice Player with 3-Layer Architecture:
+ * 1. Memory Cache (instant 0ms)
+ * 2. Persistent IndexedDB Cache (instant 0ms across page reloads)
+ * 3. Rate-limited Queue for Gemini (21s delay safe guard to stay under 3 RPM)
+ * 4. High-Quality Natural Browser Voice Fallback
  */
 export async function playNaturalVoice(
   text: string,
   options: PlaybackOptions = {}
 ): Promise<HTMLAudioElement | null> {
-  const cleanText = text.trim();
+  const cleanText = extractEnglishOnly(text);
   if (!cleanText) return null;
 
   stopCurrentAudio();
 
-  const voiceId = options.voiceId || 'us-female';
-  const speed = options.speed || 1.0;
-  const cacheKey = `${voiceId}:::${cleanText.toLowerCase()}`;
+  const voiceId = options.voiceId || globalPlaybackState.voiceId || 'us-female';
+  const speed = options.speed || globalPlaybackState.speed || 1.0;
+  const cacheKey = buildAudioCacheKey(cleanText, voiceId);
 
-  // Check client memory cache
-  const cachedUrl = clientAudioCache.get(cacheKey);
-  if (cachedUrl) {
-    return playAudioUrl(cachedUrl, speed, options);
+  // If user requested browser fallback directly
+  if (options.forceBrowserFallback) {
+    notifyStateChange({
+      currentText: cleanText,
+      activeSentence: cleanText,
+      isPlaying: true,
+      isPaused: false,
+      isLoading: false,
+      speed,
+      voiceId,
+      source: 'fallback',
+    });
+    await speakTextWithBrowser(cleanText, { ...options, speed, voiceId });
+    return null;
   }
 
-  // Request high-quality audio from backend proxy
+  // Layer 1: Check in-memory URL cache
+  const inMemoryUrl = memoryAudioCache.get(cacheKey);
+  if (inMemoryUrl) {
+    notifyStateChange({
+      currentText: cleanText,
+      activeSentence: cleanText,
+      isPlaying: true,
+      isPaused: false,
+      isLoading: false,
+      speed,
+      voiceId,
+      source: 'cached',
+    });
+    return playAudioUrl(inMemoryUrl, speed, options, 'cached');
+  }
+
+  // Layer 2: Check persistent IndexedDB cache
+  const cachedFromDB = await getAudioFromCache(cacheKey);
+  if (cachedFromDB && cachedFromDB.audioBase64) {
+    const audioUrl = `data:${cachedFromDB.mimeType || 'audio/wav'};base64,${cachedFromDB.audioBase64}`;
+    memoryAudioCache.set(cacheKey, audioUrl);
+
+    notifyStateChange({
+      currentText: cleanText,
+      activeSentence: cleanText,
+      isPlaying: true,
+      isPaused: false,
+      isLoading: false,
+      speed,
+      voiceId,
+      source: 'cached',
+    });
+    return playAudioUrl(audioUrl, speed, options, 'cached');
+  }
+
+  // Layer 3: Not cached — Enqueue safe Gemini request
+  notifyStateChange({
+    currentText: cleanText,
+    activeSentence: cleanText,
+    isPlaying: true,
+    isPaused: false,
+    isLoading: true,
+    speed,
+    voiceId,
+    source: 'gemini',
+  });
+
   try {
-    currentAbortController = new AbortController();
-    const response = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: cleanText,
-        voiceId,
-      }),
-      signal: currentAbortController.signal,
+    const result = await enqueueTTSRequest(cleanText, voiceId, cacheKey, {
+      allowFallbackIfWaiting: options.allowFallbackIfWaiting,
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: Failed to fetch TTS`);
-    }
+    notifyStateChange({ isLoading: false });
 
-    const data = await response.json();
-
-    // If backend reports fallback or error, use browser SpeechSynthesis
-    if (data.fallback || !data.audioBase64) {
-      console.info('Using browser speech synthesis fallback:', data.message || data.error);
-      speakTextWithBrowser(cleanText, options);
+    if (result.fallback || !result.audioBase64) {
+      console.info('[TTS] Using high-quality browser voice fallback:', result.message);
+      notifyStateChange({ source: 'fallback' });
+      await speakTextWithBrowser(cleanText, { ...options, speed, voiceId });
       return null;
     }
 
-    const audioUrl = `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`;
-    clientAudioCache.set(cacheKey, audioUrl);
+    // Success: save into persistent IndexedDB and memory cache
+    await saveAudioToCache(cacheKey, cleanText, voiceId, result.audioBase64, result.mimeType || 'audio/wav');
+    const audioUrl = `data:${result.mimeType || 'audio/wav'};base64,${result.audioBase64}`;
+    memoryAudioCache.set(cacheKey, audioUrl);
 
-    return playAudioUrl(audioUrl, speed, options);
-  } catch (err: any) {
-    if (err.name === 'AbortError') return null;
-    console.warn('TTS API error, falling back to browser speech synthesis:', err?.message || err);
-    speakTextWithBrowser(cleanText, options);
+    notifyStateChange({ source: 'gemini' });
+    return playAudioUrl(audioUrl, speed, options, 'gemini');
+  } catch (err: unknown) {
+    notifyStateChange({ isLoading: false, source: 'fallback' });
+    console.warn('[TTS] Enqueue error, falling back to browser speech:', err);
+    await speakTextWithBrowser(cleanText, { ...options, speed, voiceId });
     return null;
   }
 }
@@ -188,16 +384,18 @@ export async function playNaturalVoice(
 function playAudioUrl(
   url: string,
   speed: number,
-  options: PlaybackOptions
+  options: PlaybackOptions,
+  source: PlaybackSource = 'gemini'
 ): HTMLAudioElement {
   const audio = new Audio(url);
   currentAudio = audio;
 
-  // Preserve pitch during speed adjustments
+  // Preserve natural pitch during speed adjustments
   audio.preservesPitch = true;
   audio.playbackRate = speed;
 
   audio.onplay = () => {
+    notifyStateChange({ isPlaying: true, isPaused: false, source });
     options.onStart?.();
   };
 
@@ -205,6 +403,7 @@ function playAudioUrl(
     if (currentAudio === audio) {
       currentAudio = null;
     }
+    notifyStateChange({ isPlaying: false, isPaused: false });
     options.onEnd?.();
   };
 
@@ -213,21 +412,115 @@ function playAudioUrl(
     if (currentAudio === audio) {
       currentAudio = null;
     }
+    notifyStateChange({ isPlaying: false, isPaused: false });
     options.onError?.(e);
   };
 
   audio.play().catch((err) => {
-    console.warn('Audio play request interrupted or prevented:', err);
+    console.warn('Audio play request interrupted:', err);
+    if (currentAudio === audio) {
+      currentAudio = null;
+    }
+    notifyStateChange({ isPlaying: false, isPaused: false });
     options.onError?.(err);
   });
 
   return audio;
 }
 
-// Fallback SpeechSynthesis
+/**
+ * Sequential Paragraph Player:
+ * Smart paragraph chunking:
+ * - Splits into sentences.
+ * - Reuses cached sentences instantly (0s wait).
+ * - If sentence is not cached and queue cooldown is active, uses smooth browser voice
+ *   so the learner gets seamless continuous playback without 21s pauses!
+ */
+export async function playParagraphSequence(
+  text: string,
+  options: PlaybackOptions = {}
+): Promise<void> {
+  const cleanParagraph = extractEnglishOnly(text);
+  if (!cleanParagraph) return;
+
+  const sentences = splitIntoSentences(cleanParagraph);
+  if (sentences.length <= 1) {
+    await playNaturalVoice(cleanParagraph, options);
+    return;
+  }
+
+  stopCurrentAudio();
+  const sequenceToken = ++activeSequenceToken;
+
+  const voiceId = options.voiceId || globalPlaybackState.voiceId || 'us-female';
+  const speed = options.speed || globalPlaybackState.speed || 1.0;
+
+  notifyStateChange({
+    currentText: cleanParagraph,
+    activeSentence: sentences[0],
+    isPlaying: true,
+    isPaused: false,
+    isLoading: true,
+    speed,
+    voiceId,
+    totalSentences: sentences.length,
+    currentSentenceIndex: 0,
+  });
+
+  options.onStart?.();
+
+  for (let i = 0; i < sentences.length; i++) {
+    if (activeSequenceToken !== sequenceToken) {
+      // Sequence was cancelled by user
+      return;
+    }
+
+    const sentence = sentences[i];
+    notifyStateChange({
+      activeSentence: sentence,
+      currentSentenceIndex: i,
+    });
+
+    await new Promise<void>((resolve) => {
+      let isResolved = false;
+      const safeResolve = () => {
+        if (!isResolved) {
+          isResolved = true;
+          resolve();
+        }
+      };
+
+      // For sentences inside a paragraph, allow instant browser voice if Gemini queue would delay
+      playNaturalVoice(sentence, {
+        voiceId,
+        speed,
+        allowFallbackIfWaiting: true,
+        onEnd: () => {
+          setTimeout(safeResolve, 400); // 400ms natural breath pause
+        },
+        onError: () => {
+          safeResolve();
+        },
+      });
+    });
+  }
+
+  if (activeSequenceToken === sequenceToken) {
+    notifyStateChange({
+      isPlaying: false,
+      isPaused: false,
+      activeSentence: null,
+      totalSentences: 0,
+      currentSentenceIndex: 0,
+    });
+    options.onEnd?.();
+  }
+}
+
+// Enhanced High-Quality Browser SpeechSynthesis
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
-function loadBrowserVoices(): Promise<SpeechSynthesisVoice[]> {
+export function loadBrowserVoices(): Promise<SpeechSynthesisVoice[]> {
   return new Promise((resolve) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       resolve([]);
@@ -254,48 +547,103 @@ if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
   loadBrowserVoices();
 }
 
+/**
+ * Ranks system voices to pick natural/neural/enhanced voices on macOS, Windows, iOS, ChromeOS
+ */
+export function getBestNaturalSystemVoice(
+  voices: SpeechSynthesisVoice[],
+  targetAccent: 'en-US' | 'en-GB' = 'en-US',
+  preferredGender: 'female' | 'male' = 'female'
+): SpeechSynthesisVoice | null {
+  const englishVoices = voices.filter((v) => v.lang.startsWith('en'));
+  if (englishVoices.length === 0) return null;
+
+  // Check if user set a custom preferred voice in localStorage
+  if (typeof window !== 'undefined') {
+    const userPrefURI = localStorage.getItem('my_english_preferred_sys_voice');
+    if (userPrefURI) {
+      const customVoice = englishVoices.find((v) => v.voiceURI === userPrefURI);
+      if (customVoice) return customVoice;
+    }
+  }
+
+  // Keywords that denote high-quality neural/enhanced speech
+  const premiumKeywords = ['natural', 'enhanced', 'siri', 'neural', 'premium', 'google', 'daniel', 'samantha', 'karen', 'oliver'];
+
+  // Score candidate voices
+  const scored = englishVoices.map((voice) => {
+    let score = 0;
+    const nameLower = voice.name.toLowerCase();
+    const langLower = voice.lang.toLowerCase();
+
+    // Accent match
+    if (targetAccent === 'en-GB' && (langLower.includes('gb') || langLower.includes('uk'))) {
+      score += 40;
+    } else if (targetAccent === 'en-US' && langLower.includes('us')) {
+      score += 40;
+    }
+
+    // High quality badges
+    premiumKeywords.forEach((kw) => {
+      if (nameLower.includes(kw)) score += 20;
+    });
+
+    // Gender heuristic check
+    if (preferredGender === 'female' && (nameLower.includes('samantha') || nameLower.includes('karen') || nameLower.includes('victoria') || nameLower.includes('female'))) {
+      score += 15;
+    } else if (preferredGender === 'male' && (nameLower.includes('daniel') || nameLower.includes('oliver') || nameLower.includes('george') || nameLower.includes('male'))) {
+      score += 15;
+    }
+
+    // Avoid robotic generic speech synth
+    if (nameLower.includes('espeak')) score -= 50;
+
+    return { voice, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.voice || englishVoices[0];
+}
+
 export async function speakTextWithBrowser(
   text: string,
   options: PlaybackOptions = {}
 ): Promise<void> {
+  const cleanText = extractEnglishOnly(text);
+  if (!cleanText) return;
+
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
     options.onError?.(new Error('SpeechSynthesis not supported'));
     return;
   }
 
   window.speechSynthesis.cancel();
-  isSyntheticSpeaking = true;
 
   const voices = cachedVoices.length > 0 ? cachedVoices : await loadBrowserVoices();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = options.speed || 1.0;
+  const utterance = new SpeechSynthesisUtterance(cleanText);
+  utterance.rate = options.speed || globalPlaybackState.speed || 1.0;
 
-  const accent = options.accent || (options.voiceId?.startsWith('uk') ? 'en-GB' : 'en-US');
-  const englishVoices = voices.filter((v) => v.lang.startsWith('en'));
+  const targetAccent = options.accent || (options.voiceId?.startsWith('uk') ? 'en-GB' : 'en-US');
+  const preferredGender = options.voiceGender || (options.voiceId?.endsWith('male') ? 'male' : 'female');
 
-  let matchedVoice = englishVoices.find(
-    (v) => v.lang.includes(accent.replace('-', '_')) || v.lang.includes(accent)
-  );
-  if (!matchedVoice && englishVoices.length > 0) {
-    matchedVoice = englishVoices[0];
+  const bestVoice = getBestNaturalSystemVoice(voices, targetAccent, preferredGender);
+  if (bestVoice) {
+    utterance.voice = bestVoice;
   }
-
-  if (matchedVoice) {
-    utterance.voice = matchedVoice;
-  }
-  utterance.lang = accent;
+  utterance.lang = targetAccent;
 
   utterance.onstart = () => {
+    notifyStateChange({ isPlaying: true, isPaused: false, source: 'fallback' });
     options.onStart?.();
   };
 
   utterance.onend = () => {
-    isSyntheticSpeaking = false;
+    notifyStateChange({ isPlaying: false, isPaused: false });
     options.onEnd?.();
   };
 
   utterance.onerror = (e) => {
-    isSyntheticSpeaking = false;
+    notifyStateChange({ isPlaying: false, isPaused: false });
     options.onError?.(e);
   };
 
@@ -303,8 +651,7 @@ export async function speakTextWithBrowser(
 }
 
 /**
- * Universal Speak Function:
- * Automatically uses natural voice with user settings and falls back if needed.
+ * Universal Speak Function
  */
 export async function speakText(
   text: string,
@@ -315,6 +662,11 @@ export async function speakText(
 
 export function stopSpeech(): void {
   stopCurrentAudio();
+}
+
+export function playWithFallbackNow(text: string): void {
+  bypassQueueToBrowserFallback();
+  playNaturalVoice(text, { forceBrowserFallback: true });
 }
 
 // Simple Web Audio API sound effects for quizzes
@@ -331,74 +683,95 @@ export function playSound(type: 'correct' | 'wrong' | 'complete'): void {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(523.25, now); // C5
-      osc.frequency.exponentialRampToValueAtTime(659.25, now + 0.12); // E5
-      osc.frequency.exponentialRampToValueAtTime(783.99, now + 0.24); // G5
+      osc.frequency.setValueAtTime(523.25, now);
+      osc.frequency.exponentialRampToValueAtTime(659.25, now + 0.12);
       gain.gain.setValueAtTime(0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(now);
-      osc.stop(now + 0.35);
+      osc.stop(now + 0.25);
     } else if (type === 'wrong') {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(260, now);
-      osc.frequency.exponentialRampToValueAtTime(190, now + 0.25);
-      gain.gain.setValueAtTime(0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, now);
+      osc.frequency.exponentialRampToValueAtTime(160, now + 0.18);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.22);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(now);
-      osc.stop(now + 0.3);
+      osc.stop(now + 0.22);
     } else if (type === 'complete') {
-      [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
+      const notes = [440, 554.37, 659.25, 880];
+      notes.forEach((freq, idx) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.12, now + i * 0.08);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.08 + 0.25);
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+        gain.gain.setValueAtTime(0.12, now + idx * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.08 + 0.2);
         osc.connect(gain);
         gain.connect(ctx.destination);
-        osc.start(now + i * 0.08);
-        osc.stop(now + i * 0.08 + 0.25);
+        osc.start(now + idx * 0.08);
+        osc.stop(now + idx * 0.08 + 0.2);
       });
     }
   } catch {}
 }
 
-// Compare spoken text with target text
-export function evaluateSpokenSentence(target: string, spoken: string): {
+/**
+ * Evaluates spoken transcript against target sentence:
+ * Performs word normalization, token alignment, and scoring.
+ */
+export function evaluateSpokenSentence(
+  target: string,
+  spoken: string
+): {
   score: number;
   isGood: boolean;
   tokenAnalysis: { word: string; matched: boolean }[];
 } {
-  const cleanWord = (w: string) => w.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const targetWords = target.split(/\s+/).filter(Boolean);
-  const spokenWords = spoken.split(/\s+/).map(cleanWord).filter(Boolean);
+  const cleanTarget = extractEnglishOnly(target).toLowerCase();
+  const cleanSpoken = extractEnglishOnly(spoken).toLowerCase();
 
-  let matchCount = 0;
-  const spokenSet = new Set(spokenWords);
+  const targetWords = cleanTarget
+    .replace(/[^\w\s']/g, '')
+    .split(/\s+/)
+    .filter(Boolean);
 
+  const spokenWords = cleanSpoken
+    .replace(/[^\w\s']/g, '')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (targetWords.length === 0) {
+    return { score: 100, isGood: true, tokenAnalysis: [] };
+  }
+
+  let matchedCount = 0;
   const tokenAnalysis = targetWords.map((word) => {
-    const cleaned = cleanWord(word);
-    const matched =
-      spokenSet.has(cleaned) ||
-      spokenWords.some((sw) => {
-        if (sw === cleaned) return true;
-        if (cleaned.length > 3 && sw.includes(cleaned)) return true;
-        if (sw.length > 3 && cleaned.includes(sw)) return true;
-        return false;
-      });
-    if (matched) matchCount++;
-    return { word, matched };
+    const isMatched = spokenWords.some((spk) => {
+      if (spk === word) return true;
+      if (spk.length > 3 && word.length > 3) {
+        if (spk.startsWith(word.slice(0, -1)) || word.startsWith(spk.slice(0, -1))) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (isMatched) matchedCount++;
+    return { word, matched: isMatched };
   });
 
-  const rawScore =
-    targetWords.length > 0 ? Math.round((matchCount / targetWords.length) * 100) : 0;
+  const rawScore = Math.round((matchedCount / targetWords.length) * 100);
   const score = Math.min(100, Math.max(0, rawScore));
-  const isGood = score >= 75;
 
-  return { score, isGood, tokenAnalysis };
+  return {
+    score,
+    isGood: score >= 75,
+    tokenAnalysis,
+  };
 }

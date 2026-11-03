@@ -132,9 +132,11 @@ app.post('/api/tts', async (req: Request, res: Response): Promise<void> => {
     // If currently within rate-limit cooldown, seamlessly trigger browser fallback
     if (Date.now() < rateLimitUntil) {
       const remainingSec = Math.max(1, Math.ceil((rateLimitUntil - Date.now()) / 1000));
+      res.setHeader('Retry-After', String(remainingSec));
       res.status(200).json({
         fallback: true,
         rateLimited: true,
+        cooldownRemaining: remainingSec,
         message: `Free-tier TTS rate limit cooldown active (${remainingSec}s remaining). Seamlessly using browser speech engine.`,
       });
       return;
@@ -223,18 +225,25 @@ app.post('/api/tts', async (req: Request, res: Response): Promise<void> => {
         waitMs = Math.ceil(parseFloat(retryMatch[1]) * 1000) + 1000;
       }
       rateLimitUntil = Date.now() + waitMs;
-      console.warn(`[TTS] Gemini Free-Tier limit reached (3 RPM). Cooldown: ${Math.ceil(waitMs / 1000)}s. Using browser speech engine fallback.`);
+      const cooldownSec = Math.ceil(waitMs / 1000);
+      res.setHeader('Retry-After', String(cooldownSec));
+      console.warn(`[TTS] Gemini Free-Tier limit reached (3 RPM). Cooldown: ${cooldownSec}s. Using browser speech engine fallback.`);
+      res.status(200).json({
+        fallback: true,
+        rateLimited: true,
+        cooldownRemaining: cooldownSec,
+        message: `Free-tier TTS rate limit (3 RPM) reached. Cooldown: ${cooldownSec}s. Seamlessly using browser speech engine.`,
+      });
+      return;
     } else {
       console.warn('[TTS] Non-fatal TTS error, falling back to browser speech:', err?.message || err);
+      res.status(200).json({
+        fallback: true,
+        rateLimited: false,
+        message: 'Falling back to browser speech synthesis.',
+      });
+      return;
     }
-
-    res.status(200).json({
-      fallback: true,
-      rateLimited: isQuotaError,
-      message: isQuotaError
-        ? 'Free-tier TTS rate limit (3 RPM) reached. Seamlessly using browser speech engine.'
-        : 'Falling back to browser speech synthesis.',
-    });
   }
 });
 

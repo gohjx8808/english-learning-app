@@ -17,6 +17,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { DEFAULT_PROGRESS } from '../services/storage';
+import { TTSButton } from './TTSButton';
 
 interface ProgressViewProps {
   progress: UserProgress;
@@ -361,9 +362,14 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
                       </p>
                     </div>
                   </div>
-                  <span className="text-xs text-slate-400 whitespace-nowrap font-mono">
-                    {dateStr}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {act.details && (
+                      <TTSButton text={act.details} size="xs" variant="ghost" title={`Listen to ${act.details}`} />
+                    )}
+                    <span className="text-xs text-slate-400 whitespace-nowrap font-mono">
+                      {dateStr}
+                    </span>
+                  </div>
                 </div>
               );
             })}

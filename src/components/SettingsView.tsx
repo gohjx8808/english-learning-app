@@ -9,16 +9,20 @@ import {
   Check, 
   Save, 
   Sparkles, 
-  Radio, 
   Gauge, 
   ShieldCheck,
-  Play
+  Database,
+  Trash2,
+  RefreshCw,
+  Radio,
+  Clock
 } from 'lucide-react';
 import { 
   NATURAL_VOICE_OPTIONS, 
   playNaturalVoice, 
   stopCurrentAudio 
 } from '../services/speech';
+import { useTTS } from '../context/TTSContext';
 
 interface SettingsViewProps {
   progress: UserProgress;
@@ -31,12 +35,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onUpdateProgress,
   onLogActivity,
 }) => {
+  const {
+    cacheStats,
+    refreshCacheStats,
+    clearCache,
+    availableSystemVoices,
+    preferredSystemVoice,
+    setPreferredSystemVoice,
+    queueState
+  } = useTTS();
+
   const [settings, setSettings] = useState<UserSettings>({
     ...progress.settings,
     voiceId: progress.settings.voiceId || 'us-female',
   });
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
+  const [previewingSystemVoice, setPreviewingSystemVoice] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
   const importFileRef = useRef<HTMLInputElement | null>(null);
 
   const handleSave = () => {
@@ -60,6 +76,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       onEnd: () => setPreviewingVoiceId(null),
       onError: () => setPreviewingVoiceId(null),
     });
+  };
+
+  const handlePreviewSystemVoice = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    stopCurrentAudio();
+    setPreviewingSystemVoice(true);
+
+    playNaturalVoice('Hello! This is your local system natural voice preview.', {
+      forceBrowserFallback: true,
+      speed: settings.speechRate,
+      onEnd: () => setPreviewingSystemVoice(false),
+      onError: () => setPreviewingSystemVoice(false),
+    });
+  };
+
+  const handleClearCache = async () => {
+    if (window.confirm('Are you sure you want to clear cached audio? New requests will re-download from Gemini.')) {
+      setClearingCache(true);
+      await clearCache();
+      setClearingCache(false);
+    }
   };
 
   const selectVoice = (voiceId: VoiceProfileId) => {
@@ -108,6 +145,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     reader.readAsText(file);
   };
 
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 KB';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       
@@ -118,7 +163,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             Settings & Voice Preferences · 学习设置
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Choose high-quality human-like teacher voices, adjust speed, and manage learning goals.
+            Choose high-quality human-like teacher voices, manage audio cache, and customize your study plan.
           </p>
         </div>
 
@@ -237,20 +282,119 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             Speed adjustments preserve the natural vocal pitch and rhythm without chipmunk or robotic distortion.
           </p>
         </div>
+      </div>
 
-        {/* API Architecture & Fallback Disclosure */}
-        <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100 text-xs text-slate-600 space-y-1.5">
-          <div className="flex items-center gap-1.5 font-semibold text-slate-800">
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Server-Side Audio Proxy & Offline Fallback</span>
+      {/* 3. Audio Cache & Gemini Rate-Limit Management */}
+      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <Database className="w-4 h-4 text-emerald-600" />
+            <h2 className="text-sm font-bold text-slate-900">
+              Persistent Audio Cache & Free-Tier Optimization · 离线音频缓存与限额保护
+            </h2>
           </div>
-          <p className="text-[11px] leading-relaxed text-slate-500">
-            TTS calls are processed securely server-side using Gemini Text-to-Speech (<code className="text-slate-700">gemini-3.8-flash-lite-tts</code>). Audio is cached both on the server and in your browser to minimize latency and bandwidth. If network or API quota is unavailable, the platform automatically switches to your browser's local speech engine.
+          <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+            IndexedDB Active
+          </span>
+        </div>
+
+        <p className="text-xs text-slate-600 leading-relaxed">
+          Google Gemini Free Tier allows <strong>3 requests per minute (3 RPM)</strong>. To keep the app 100% free and lightning fast:
+        </p>
+        <ul className="text-xs text-slate-600 space-y-1.5 list-disc list-inside">
+          <li><strong>Persistent IndexedDB Storage:</strong> Every sentence and vocabulary word synthesized by Gemini is cached permanently in your browser. Replaying it uses 0 API calls and loads instantly (0ms latency).</li>
+          <li><strong>Rate-Limiting Queue (21s interval):</strong> Enforces a safe 21-second delay between new API requests to mathematically avoid HTTP 429 quota exhaustion.</li>
+          <li><strong>Smart Fallback:</strong> While cooling down or if you prefer not to wait, the player automatically plays using your device's natural voice.</li>
+        </ul>
+
+        {/* Cache status metrics */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/70">
+            <div className="text-[11px] text-slate-500">Cached Audio Tracks</div>
+            <div className="text-lg font-bold text-slate-900 mt-0.5">{cacheStats.count} items</div>
+          </div>
+          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/70">
+            <div className="text-[11px] text-slate-500">Estimated Cache Size</div>
+            <div className="text-lg font-bold text-slate-900 mt-0.5">{formatBytes(cacheStats.totalEstimatedBytes)}</div>
+          </div>
+          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/70">
+            <div className="text-[11px] text-slate-500">Queue Cooldown Status</div>
+            <div className="text-lg font-bold text-slate-900 mt-0.5 flex items-center gap-1.5">
+              {queueState.cooldownRemainingSeconds > 0 ? (
+                <span className="text-amber-600 flex items-center gap-1">
+                  <Clock className="w-4 h-4 animate-spin" />
+                  {queueState.cooldownRemainingSeconds}s wait
+                </span>
+              ) : (
+                <span className="text-emerald-600">Ready (0s wait)</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Cache Actions */}
+        <div className="flex items-center justify-between pt-2">
+          <button
+            type="button"
+            onClick={refreshCacheStats}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-xl transition-colors cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Refresh Stats</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleClearCache}
+            disabled={cacheStats.count === 0 || clearingCache}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 disabled:opacity-50 text-xs font-medium rounded-xl transition-colors cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{clearingCache ? 'Clearing...' : 'Clear Audio Cache'}</span>
+          </button>
+        </div>
+
+        {/* 4. Natural Fallback System Voice Selector */}
+        <div className="pt-4 border-t border-slate-100 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 font-semibold text-xs text-slate-800">
+              <Radio className="w-3.5 h-3.5 text-sky-600" />
+              <span>Preferred Fallback System Voice · 本地系统备用语音</span>
+            </div>
+            <button
+              type="button"
+              onClick={handlePreviewSystemVoice}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                previewingSystemVoice
+                  ? 'bg-amber-500 text-white animate-pulse'
+                  : 'bg-white border border-slate-200 text-slate-700 hover:text-sky-600 hover:bg-sky-50'
+              }`}
+            >
+              <Volume2 className="w-3.5 h-3.5" />
+              <span>{previewingSystemVoice ? 'Playing...' : 'Test Voice (测试系统音)'}</span>
+            </button>
+          </div>
+
+          <p className="text-[11px] text-slate-500">
+            When Gemini quota is cooling down or offline, this system voice provides instant pronunciation. We automatically prioritize natural/neural voices installed on your operating system.
           </p>
+
+          <select
+            value={preferredSystemVoice || ''}
+            onChange={(e) => setPreferredSystemVoice(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:outline-hidden focus:border-sky-500 cursor-pointer"
+          >
+            <option value="">Auto (Best detected natural English voice)</option>
+            {availableSystemVoices.map((v) => (
+              <option key={v.voiceURI} value={v.voiceURI}>
+                {v.name} ({v.lang}) {v.localService ? '· Local' : '· Online'}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
-      {/* 3. Learner Profile & Daily Goal */}
+      {/* 5. Learner Profile & Daily Goal */}
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-5">
         <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
           <User className="w-4 h-4 text-sky-600" />
@@ -296,7 +440,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* 4. Bilingual Display Mode */}
+      {/* 6. Bilingual Display Mode */}
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-4">
         <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
           <Languages className="w-4 h-4 text-sky-600" />
@@ -328,7 +472,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* 5. Data Backup & Local Storage */}
+      {/* 7. Data Backup & Local Storage */}
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-5">
         <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
           <Download className="w-4 h-4 text-sky-600" />

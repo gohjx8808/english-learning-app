@@ -13,6 +13,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { speakText, playSound } from '../services/speech';
+import { TTSButton } from './TTSButton';
 import confetti from 'canvas-confetti';
 
 interface GrammarViewProps {
@@ -201,6 +202,14 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                   {activeLesson.summary} · {activeLesson.summaryZh}
                 </p>
               </div>
+
+              <TTSButton
+                text={`${activeLesson.title}. ${activeLesson.summary}`}
+                size="sm"
+                variant="subtle"
+                showLabel
+                label="Listen"
+              />
             </div>
 
             {/* Inner Subtabs */}
@@ -255,9 +264,17 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
               
               {/* English Explanation */}
               <div className="space-y-2">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-                  Grammar Rule · 语法释义
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                    Grammar Rule · 语法释义
+                  </span>
+                  <TTSButton
+                    text={activeLesson.explanationEn}
+                    size="xs"
+                    variant="ghost"
+                    title="Listen to grammar rule"
+                  />
+                </div>
                 <p className="text-sm text-slate-800 leading-relaxed font-medium">
                   {activeLesson.explanationEn}
                 </p>
@@ -275,10 +292,13 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                   {activeLesson.structures.map((st, i) => (
                     <div
                       key={i}
-                      className="p-3 bg-sky-50/70 border border-sky-100 rounded-xl text-xs sm:text-sm font-mono text-sky-900 flex items-center gap-2"
+                      className="p-3 bg-sky-50/70 border border-sky-100 rounded-xl text-xs sm:text-sm font-mono text-sky-900 flex items-center justify-between gap-2"
                     >
-                      <Sparkles className="w-3.5 h-3.5 text-sky-600 shrink-0" />
-                      <span>{st}</span>
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                        <span>{st}</span>
+                      </div>
+                      <TTSButton text={st} size="xs" variant="ghost" title="Listen to structure formula" />
                     </div>
                   ))}
                 </div>
@@ -316,13 +336,12 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                         <p className="font-semibold text-slate-900">{ex.en}</p>
                         <p className="text-xs text-slate-500 mt-0.5">{ex.zh}</p>
                       </div>
-                      <button
-                        onClick={() => handlePronounce(ex.en)}
-                        className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-white rounded-lg transition-colors cursor-pointer shrink-0"
-                        title="Pronounce"
-                      >
-                        <Volume2 className="w-4 h-4" />
-                      </button>
+                      <TTSButton
+                        text={ex.en}
+                        size="sm"
+                        variant="ghost"
+                        title="Listen to positive example"
+                      />
                     </div>
                   ))}
                 </div>
@@ -343,13 +362,12 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                         <p className="font-semibold text-slate-900">{ex.en}</p>
                         <p className="text-xs text-slate-500 mt-0.5">{ex.zh}</p>
                       </div>
-                      <button
-                        onClick={() => handlePronounce(ex.en)}
-                        className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-white rounded-lg transition-colors cursor-pointer shrink-0"
-                        title="Pronounce"
-                      >
-                        <Volume2 className="w-4 h-4" />
-                      </button>
+                      <TTSButton
+                        text={ex.en}
+                        size="sm"
+                        variant="ghost"
+                        title="Listen to negative example"
+                      />
                     </div>
                   ))}
                 </div>
@@ -370,13 +388,12 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                         <p className="font-semibold text-slate-900">{ex.en}</p>
                         <p className="text-xs text-slate-500 mt-0.5">{ex.zh}</p>
                       </div>
-                      <button
-                        onClick={() => handlePronounce(ex.en)}
-                        className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-white rounded-lg transition-colors cursor-pointer shrink-0"
-                        title="Pronounce"
-                      >
-                        <Volume2 className="w-4 h-4" />
-                      </button>
+                      <TTSButton
+                        text={ex.en}
+                        size="sm"
+                        variant="ghost"
+                        title="Listen to question example"
+                      />
                     </div>
                   ))}
                 </div>
@@ -412,13 +429,29 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                       <X className="w-4 h-4 shrink-0 mt-0.5" />
                       <span>{mis.wrong}</span>
                     </div>
-                    <div className="flex items-start gap-2 text-emerald-700 font-semibold">
-                      <Check className="w-4 h-4 shrink-0 mt-0.5" />
-                      <span>{mis.right}</span>
+                    <div className="flex items-center justify-between gap-2 text-emerald-700 font-semibold">
+                      <div className="flex items-start gap-2">
+                        <Check className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span>{mis.right}</span>
+                      </div>
+                      <TTSButton
+                        text={mis.right}
+                        size="xs"
+                        variant="subtle"
+                        title="Listen to correct sentence"
+                      />
                     </div>
-                    <p className="text-xs text-slate-600 pt-1 border-t border-slate-200/60 leading-relaxed">
-                      💡 {mis.noteEn} ({mis.noteZh})
-                    </p>
+                    <div className="flex items-start justify-between gap-2 pt-1 border-t border-slate-200/60">
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        💡 {mis.noteEn} ({mis.noteZh})
+                      </p>
+                      <TTSButton
+                        text={mis.noteEn}
+                        size="xs"
+                        variant="ghost"
+                        title="Listen to explanation note"
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -472,11 +505,19 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                       className="p-5 rounded-2xl bg-slate-50/70 border border-slate-200/80 space-y-3"
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-bold text-slate-900">
-                            {index + 1}. {ex.question}
-                          </p>
-                          <p className="text-xs text-slate-400 mt-0.5">{ex.questionZh}</p>
+                        <div className="flex items-start gap-2 flex-1">
+                          <div>
+                            <p className="text-sm font-bold text-slate-900">
+                              {index + 1}. {ex.question}
+                            </p>
+                            <p className="text-xs text-slate-400 mt-0.5">{ex.questionZh}</p>
+                          </div>
+                          <TTSButton
+                            text={ex.question}
+                            size="xs"
+                            variant="ghost"
+                            title="Listen to question"
+                          />
                         </div>
                         {isAnswered && (
                           <div className="shrink-0">
@@ -512,17 +553,25 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                           }
 
                           return (
-                            <button
+                            <div
                               key={opt}
-                              disabled={isAnswered}
-                              onClick={() => handleSelectOption(ex.id, opt)}
-                              className={`p-3 rounded-xl border text-xs sm:text-sm text-left transition-all cursor-pointer flex items-center justify-between ${optStyle}`}
+                              className={`p-3 rounded-xl border text-xs sm:text-sm text-left transition-all flex items-center justify-between ${optStyle}`}
                             >
-                              <span>{opt}</span>
-                              {isAnswered && opt === ex.correctAnswer && (
-                                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                              )}
-                            </button>
+                              <button
+                                type="button"
+                                disabled={isAnswered}
+                                onClick={() => handleSelectOption(ex.id, opt)}
+                                className="flex-1 text-left cursor-pointer"
+                              >
+                                <span>{opt}</span>
+                              </button>
+                              <div className="flex items-center gap-1 shrink-0 ml-2">
+                                <TTSButton text={opt} size="xs" variant="minimal" title={`Listen to ${opt}`} />
+                                {isAnswered && opt === ex.correctAnswer && (
+                                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                )}
+                              </div>
+                            </div>
                           );
                         })}
                       </div>
@@ -530,9 +579,19 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
                       {/* Explanation Callout */}
                       {isAnswered && (
                         <div className="p-3 rounded-xl bg-white border border-slate-200 text-xs text-slate-600 space-y-1 animate-in fade-in duration-150">
-                          <p className="font-semibold text-slate-800">Explanation:</p>
-                          <p>{ex.explanation}</p>
-                          <p className="text-slate-500">{ex.explanationZh}</p>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="font-semibold text-slate-800">Explanation:</p>
+                              <p>{ex.explanation}</p>
+                              <p className="text-slate-500">{ex.explanationZh}</p>
+                            </div>
+                            <TTSButton
+                              text={ex.explanation}
+                              size="xs"
+                              variant="ghost"
+                              title="Listen to explanation"
+                            />
+                          </div>
                         </div>
                       )}
                     </div>

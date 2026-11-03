@@ -16,7 +16,7 @@ import {
   Mic,
   Clock
 } from 'lucide-react';
-import { speakText } from '../services/speech';
+import { TTSButton } from './TTSButton';
 
 interface DashboardViewProps {
   progress: UserProgress;
@@ -66,14 +66,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     context: 'Proverb · 每日箴言',
   };
 
-  const handlePlayQuoteAudio = () => {
-    speakText(dailyQuote.en, {
-      voiceId: progress.settings.voiceId || 'us-female',
-      speed: progress.settings.speechRate || 1.0,
-      accent: progress.settings.voiceAccent,
-    });
-  };
-
   return (
     <div className="space-y-8 animate-in fade-in duration-200">
       
@@ -86,9 +78,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-slate-500 font-normal">Progressing towards B1 Intermediate</span>
           </div>
 
-          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
-            Welcome back, {progress.settings.userName}! 👋
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
+              Welcome back, {progress.settings.userName}! 👋
+            </h1>
+            <TTSButton
+              text={`Welcome back, ${progress.settings.userName}! Ready for your 15 to 30 minute daily English practice? Consistent small steps yield fluency.`}
+              size="sm"
+              variant="subtle"
+              title="Listen to welcome message"
+            />
+          </div>
           <p className="mt-2 text-slate-600 text-sm sm:text-base leading-relaxed">
             Ready for your 15–30 minute daily English practice? Consistent small steps yield fluency.
             <span className="block text-xs sm:text-sm text-slate-400 mt-0.5">准备好今天的日常英语练习了吗？每天坚持一步，自然流利自如。</span>
@@ -211,20 +211,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="font-semibold text-sky-600">Daily Recommendation · 今日推荐课程</span>
               <span>15 min study</span>
             </div>
-            <h2 className="text-lg font-bold text-slate-900">
-              Grammar Master: Past Simple vs Present Perfect
-            </h2>
-            <p className="text-sm text-slate-600 mt-1 leading-relaxed">
-              Understand when to use specific past time indicators (yesterday, ago) versus general life experiences (ever, already).
-            </p>
-            <p className="text-xs text-slate-400 mt-0.5">
-              掌握一般过去时与现在完成时的关键界限，彻底告别中式时态混淆。
-            </p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">
+                  Grammar Master: Past Simple vs Present Perfect
+                </h2>
+                <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                  Understand when to use specific past time indicators (yesterday, ago) versus general life experiences (ever, already).
+                </p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  掌握一般过去时与现在完成时的关键界限，彻底告别中式时态混淆。
+                </p>
+              </div>
+              <TTSButton
+                text="Grammar Master: Past Simple versus Present Perfect. Understand when to use specific past time indicators versus general life experiences."
+                size="sm"
+                variant="subtle"
+                label="Listen"
+                showLabel
+              />
+            </div>
 
             <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                <span className="text-slate-400 block text-[11px]">Structures</span>
-                <span className="font-semibold text-slate-800">have + V3</span>
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-between">
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Structures</span>
+                  <span className="font-semibold text-slate-800">have + V3</span>
+                </div>
+                <TTSButton text="have plus past participle" size="xs" variant="ghost" />
               </div>
               <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
                 <span className="text-slate-400 block text-[11px]">Exercises</span>
@@ -270,13 +284,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
             <span className="text-xs text-slate-400">{dailyQuote.context}</span>
-            <button
-              onClick={handlePlayQuoteAudio}
-              className="p-2 text-slate-600 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors cursor-pointer"
-              title="Listen to native pronunciation"
-            >
-              <Volume2 className="w-4 h-4" />
-            </button>
+            <TTSButton
+              text={dailyQuote.en}
+              size="sm"
+              variant="subtle"
+              label="Listen"
+              showLabel
+            />
           </div>
         </div>
 
@@ -394,9 +408,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </p>
                     </div>
                   </div>
-                  <span className="text-xs text-slate-400 whitespace-nowrap tabular-nums">
-                    {dateStr}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {act.details && (
+                      <TTSButton text={act.details} size="xs" variant="ghost" title={`Listen to ${act.details}`} />
+                    )}
+                    <span className="text-xs text-slate-400 whitespace-nowrap tabular-nums">
+                      {dateStr}
+                    </span>
+                  </div>
                 </div>
               );
             })}

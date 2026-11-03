@@ -17,6 +17,7 @@ import {
   ListFilter
 } from 'lucide-react';
 import { speakText, playSound } from '../services/speech';
+import { TTSButton } from './TTSButton';
 import confetti from 'canvas-confetti';
 
 interface VocabularyViewProps {
@@ -303,13 +304,12 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
                   <span className="text-xs uppercase tracking-wider font-semibold text-slate-400">
                     {currentCard.pos}
                   </span>
-                  <button
-                    onClick={(e) => handlePronounce(currentCard.word, e)}
-                    className="p-2.5 rounded-xl bg-sky-50 text-sky-600 hover:bg-sky-500 hover:text-white transition-all cursor-pointer"
+                  <TTSButton
+                    text={currentCard.word}
+                    size="md"
+                    variant="subtle"
                     title="Pronounce word"
-                  >
-                    <Volume2 className="w-5 h-5" />
-                  </button>
+                  />
                 </div>
 
                 <div className="text-center my-auto py-6">
@@ -334,12 +334,12 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
                     <span className="text-lg font-bold text-slate-900">{currentCard.word}</span>
                     <span className="text-xs text-slate-400 font-mono">{currentCard.ipa}</span>
                   </div>
-                  <button
-                    onClick={(e) => handlePronounce(currentCard.word, e)}
-                    className="p-1.5 rounded-lg text-sky-600 hover:bg-sky-50 transition-colors"
-                  >
-                    <Volume2 className="w-4 h-4" />
-                  </button>
+                  <TTSButton
+                    text={currentCard.word}
+                    size="sm"
+                    variant="ghost"
+                    title="Pronounce word"
+                  />
                 </div>
 
                 <div className="space-y-4 my-auto">
@@ -355,9 +355,17 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
 
                   {/* English Definition */}
                   <div>
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-0.5">
-                      English Definition
-                    </span>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                        English Definition
+                      </span>
+                      <TTSButton
+                        text={currentCard.definition}
+                        size="xs"
+                        variant="ghost"
+                        title="Listen to English definition"
+                      />
+                    </div>
                     <p className="text-sm text-slate-700 leading-relaxed">
                       {currentCard.definition}
                     </p>
@@ -370,13 +378,14 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
                       <p className="text-sm font-medium text-slate-800 italic">
                         “{currentCard.example}”
                       </p>
-                      <button
-                        onClick={(e) => handlePronounce(currentCard.example, e)}
-                        className="text-slate-400 hover:text-sky-600 p-1 shrink-0"
+                      <TTSButton
+                        text={currentCard.example}
+                        size="sm"
+                        variant="subtle"
                         title="Listen to example sentence"
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                      </button>
+                        showLabel
+                        label="Listen"
+                      />
                     </div>
                     <p className="text-xs text-slate-500 mt-1">
                       {currentCard.exampleZh}
@@ -538,13 +547,12 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={() => handlePronounce(item.word)}
-                          className="p-1.5 text-slate-500 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors cursor-pointer"
+                        <TTSButton
+                          text={item.word}
+                          size="sm"
+                          variant="ghost"
                           title="Listen to pronunciation"
-                        >
-                          <Volume2 className="w-4 h-4" />
-                        </button>
+                        />
                         
                         {/* Status Icon */}
                         {status === 'learned' && (
@@ -566,16 +574,32 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
                       </div>
                     </div>
 
-                    <p className="text-xs text-slate-600 mt-2.5 leading-relaxed">
-                      {item.definition}
-                    </p>
+                    <div className="mt-2.5 flex items-start justify-between gap-2">
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        {item.definition}
+                      </p>
+                      <TTSButton
+                        text={item.definition}
+                        size="xs"
+                        variant="ghost"
+                        title="Listen to definition"
+                      />
+                    </div>
 
                     {/* Expandable Example Section */}
                     {isExpanded && (
                       <div className="mt-3 pt-3 border-t border-slate-100 space-y-2 animate-in fade-in duration-150">
-                        <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-xs">
-                          <p className="text-slate-800 font-medium italic">“{item.example}”</p>
-                          <p className="text-slate-500 mt-0.5">{item.exampleZh}</p>
+                        <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-xs flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-slate-800 font-medium italic">“{item.example}”</p>
+                            <p className="text-slate-500 mt-0.5">{item.exampleZh}</p>
+                          </div>
+                          <TTSButton
+                            text={item.example}
+                            size="xs"
+                            variant="subtle"
+                            title="Listen to example sentence"
+                          />
                         </div>
                         <div className="flex items-center justify-between text-[11px] text-slate-400">
                           <span>Category: {item.category}</span>
@@ -663,20 +687,27 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
                     <h2 className="text-3xl sm:text-4xl font-bold text-slate-900">
                       {quizQuestions[quizIndex].word.word}
                     </h2>
-                    <button
-                      onClick={() => handlePronounce(quizQuestions[quizIndex].word.word)}
-                      className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors cursor-pointer"
+                    <TTSButton
+                      text={quizQuestions[quizIndex].word.word}
+                      size="md"
+                      variant="subtle"
                       title="Listen"
-                    >
-                      <Volume2 className="w-5 h-5" />
-                    </button>
+                    />
                   </div>
                   <p className="text-sm font-mono text-slate-500 mt-1">
                     {quizQuestions[quizIndex].word.ipa} · {quizQuestions[quizIndex].word.pos}
                   </p>
-                  <p className="text-xs text-slate-500 mt-2 italic max-w-md mx-auto">
-                    “{quizQuestions[quizIndex].word.example}”
-                  </p>
+                  <div className="flex items-center justify-center gap-1.5 mt-2">
+                    <p className="text-xs text-slate-500 italic max-w-md">
+                      “{quizQuestions[quizIndex].word.example}”
+                    </p>
+                    <TTSButton
+                      text={quizQuestions[quizIndex].word.example}
+                      size="xs"
+                      variant="ghost"
+                      title="Listen to example sentence"
+                    />
+                  </div>
                 </div>
 
                 {/* 4 Choices */}
@@ -714,10 +745,18 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
                 {/* Explanation & Next */}
                 {selectedOption !== null && (
                   <div className="pt-4 border-t border-slate-100 space-y-3 animate-in fade-in duration-150">
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      <span className="font-semibold text-slate-800">English Definition:</span>{' '}
-                      {quizQuestions[quizIndex].word.definition}
-                    </p>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        <span className="font-semibold text-slate-800">English Definition:</span>{' '}
+                        {quizQuestions[quizIndex].word.definition}
+                      </p>
+                      <TTSButton
+                        text={quizQuestions[quizIndex].word.definition}
+                        size="xs"
+                        variant="ghost"
+                        title="Listen to definition"
+                      />
+                    </div>
                     <button
                       onClick={handleNextQuizQuestion}
                       className="w-full py-3 bg-sky-500 hover:bg-sky-600 text-white font-semibold text-sm rounded-xl transition-all cursor-pointer shadow-xs"
