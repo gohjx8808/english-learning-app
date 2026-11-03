@@ -11,7 +11,10 @@ import {
   Award,
   ChevronRight,
   ChevronLeft,
-  Star
+  Star,
+  ShieldAlert,
+  Check,
+  ExternalLink
 } from 'lucide-react';
 import { speakText, evaluateSpokenSentence } from '../services/speech';
 
@@ -35,7 +38,9 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
   const [isListening, setIsListening] = useState(false);
   const [spokenTranscript, setSpokenTranscript] = useState('');
   const [isSupported, setIsSupported] = useState(true);
+  const [permissionState, setPermissionState] = useState<'prompt' | 'granted' | 'denied' | 'unknown'>('unknown');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isRequestingPermission, setIsRequestingPermission] = useState(false);
 
   // Evaluation results
   const [evaluation, setEvaluation] = useState<{
@@ -44,7 +49,7 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
     tokenAnalysis: { word: string; matched: boolean }[];
   } | null>(null);
 
-  // Self rating fallback for unsupported browsers
+  // Self rating fallback
   const [selfRating, setSelfRating] = useState<number | null>(null);
 
   const recognitionRef = useRef<any>(null);
@@ -57,13 +62,30 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
 
   const currentItem = filteredItems[currentIndex] || filteredItems[0];
 
-  // Initialize SpeechRecognition on mount
+  // Initialize SpeechRecognition check & permission state check
   useEffect(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
       setIsSupported(false);
+    }
+
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions
+        .query({ name: 'microphone' as any })
+        .then((perm) => {
+          setPermissionState(perm.state as any);
+          perm.onchange = () => {
+            setPermissionState(perm.state as any);
+            if (perm.state === 'granted') {
+              setErrorMessage(null);
+            }
+          };
+        })
+        .catch(() => {
+          // Permissions API query not supported for microphone in some browsers
+        });
     }
 
     return () => {
@@ -80,6 +102,32 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
       rate: progress.settings.speechRate,
       accent: progress.settings.voiceAccent,
     });
+  };
+
+  // Explicitly prompt for mic permission using getUserMedia
+  const requestMicPermission = async () => {
+    setIsRequestingPermission(true);
+    setErrorMessage(null);
+
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Close stream tracks immediately after permission check
+        stream.getTracks().forEach((track) => track.stop());
+        setPermissionState('granted');
+        setErrorMessage(null);
+        // Start listening right away now that mic is allowed
+        setTimeout(() => startListening(), 200);
+      } else {
+        startListening();
+      }
+    } catch (err: any) {
+      console.warn('getUserMedia mic request failed:', err);
+      setPermissionState('denied');
+      setErrorMessage('Microphone access was blocked or denied by your browser.');
+    } finally {
+      setIsRequestingPermission(false);
+    }
   };
 
   const startListening = () => {
@@ -104,6 +152,8 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
 
       recognition.onstart = () => {
         setIsListening(true);
+        setPermissionState('granted');
+        setErrorMessage(null);
       };
 
       recognition.onresult = (event: any) => {
@@ -115,10 +165,13 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
       };
 
       recognition.onerror = (event: any) => {
-        console.warn('Speech recognition error', event.error);
+        console.warn('Speech recognition error event:', event.error);
         setIsListening(false);
         if (event.error === 'not-allowed') {
-          setErrorMessage('Microphone access was denied. Please allow microphone permissions in your browser bar.');
+          setPermissionState('denied');
+          setErrorMessage(
+            'Microphone access was blocked (not-allowed). Please click "Enable Microphone" below or use Self-Evaluation Mode.'
+          );
         } else if (event.error === 'no-speech') {
           setErrorMessage('No speech detected. Please speak clearly into your microphone.');
         } else {
@@ -131,10 +184,15 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
       };
 
       recognition.start();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to start speech recognition', err);
       setIsListening(false);
-      setErrorMessage('Could not initialize microphone. Please check browser permissions.');
+      if (err?.name === 'NotAllowedError' || err?.message?.includes('not-allowed')) {
+        setPermissionState('denied');
+        setErrorMessage('Microphone access was not allowed by the browser.');
+      } else {
+        setErrorMessage('Could not initialize microphone. Please check browser permissions.');
+      }
     }
   };
 
@@ -220,7 +278,7 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
             Speaking & Pronunciation · 口语表达
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Listen to native pronunciation, speak into your microphone, and receive real-time accuracy scoring.
+            Listen to native pronunciation, practice out loud, and receive real-time accuracy scoring.
           </p>
         </div>
 
@@ -234,6 +292,7 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
                 setCurrentIndex(0);
                 setEvaluation(null);
                 setSpokenTranscript('');
+                setErrorMessage(null);
               }}
               className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition-colors cursor-pointer font-medium ${
                 selectedCategory === cat
@@ -303,66 +362,88 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
 
             {/* Microphone Control Area */}
             <div className="pt-2 text-center space-y-4">
-              {isSupported ? (
-                <div>
-                  <button
-                    onClick={isListening ? stopListening : startListening}
-                    className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto transition-all cursor-pointer shadow-md ${
-                      isListening
-                        ? 'bg-rose-500 text-white animate-pulse ring-8 ring-rose-100'
-                        : 'bg-sky-500 hover:bg-sky-600 text-white'
-                    }`}
-                    title={isListening ? 'Click to stop speaking' : 'Click to start speaking'}
-                  >
-                    {isListening ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8" />}
-                  </button>
+              
+              {/* Mic Button */}
+              <div>
+                <button
+                  onClick={isListening ? stopListening : startListening}
+                  className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto transition-all cursor-pointer shadow-md ${
+                    isListening
+                      ? 'bg-rose-500 text-white animate-pulse ring-8 ring-rose-100'
+                      : 'bg-sky-500 hover:bg-sky-600 text-white'
+                  }`}
+                  title={isListening ? 'Click to stop speaking' : 'Click to start speaking'}
+                >
+                  {isListening ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8" />}
+                </button>
 
-                  <p className="text-xs font-semibold text-slate-700 mt-3">
-                    {isListening ? 'Listening... Speak now!' : 'Click the microphone to repeat sentence'}
-                  </p>
-                  <p className="text-[11px] text-slate-400">
-                    {isListening ? 'Click again when finished' : '点击麦克风开始朗读，浏览器将实时评测'}
-                  </p>
-                </div>
-              ) : (
-                /* Fallback if browser doesn't support Web Speech Recognition */
-                <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-xs text-amber-800 space-y-2">
-                  <div className="flex items-center justify-center gap-1.5 font-semibold">
-                    <AlertCircle className="w-4 h-4 text-amber-600" />
-                    <span>Speech Recognition Notice</span>
-                  </div>
-                  <p>
-                    Speech Recognition is not supported in this browser engine (or permission was denied). You can still practice by listening to native audio and self-rating your pronunciation below!
-                  </p>
-                  
-                  {/* Self evaluation stars */}
-                  <div className="pt-2 flex items-center justify-center gap-2">
-                    <span className="font-semibold text-slate-700">Self Rating:</span>
-                    {[1, 2, 3, 4, 5].map((star) => (
-                      <button
-                        key={star}
-                        onClick={() => handleSelfRating(star)}
-                        className="p-1 hover:scale-110 transition-transform cursor-pointer"
-                      >
-                        <Star
-                          className={`w-5 h-5 ${
-                            (selfRating || 0) >= star
-                              ? 'text-amber-500 fill-amber-500'
-                              : 'text-slate-300'
-                          }`}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+                <p className="text-xs font-semibold text-slate-700 mt-3">
+                  {isListening ? 'Listening... Speak now!' : 'Click the microphone to repeat sentence'}
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  {isListening ? 'Click again when finished' : '点击麦克风开始朗读，浏览器将实时评测'}
+                </p>
+              </div>
 
-              {/* Error Callout */}
+              {/* Enhanced Troubleshooting / Permission Callout when "not-allowed" */}
               {errorMessage && (
-                <div className="p-3 bg-rose-50 text-rose-700 text-xs rounded-xl border border-rose-200">
-                  {errorMessage}
+                <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-left text-xs text-amber-900 space-y-3 animate-in fade-in duration-150">
+                  <div className="flex items-start gap-2.5">
+                    <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-semibold text-slate-900">
+                        Microphone Permission Required (麦克风权限提示)
+                      </p>
+                      <p className="text-amber-800 leading-relaxed">
+                        Your browser blocked microphone access. In Chrome or Edge, click the <strong>site info icon (lock or tune icon)</strong> in the browser URL address bar and set <strong>Microphone</strong> to <strong>Allow</strong>.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-amber-200/70">
+                    <button
+                      onClick={requestMicPermission}
+                      disabled={isRequestingPermission}
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {isRequestingPermission ? 'Requesting...' : 'Request Permission (请求麦克风)'}
+                    </button>
+                    <span className="text-[11px] text-amber-700">or use self-rating below</span>
+                  </div>
                 </div>
               )}
+
+              {/* Self-Rating Star Evaluator (Always available as practical fallback or extra practice) */}
+              <div className="pt-2 p-3 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                <div className="text-left">
+                  <span className="font-semibold text-slate-800 block">Self-Evaluation Mode (自主评测)</span>
+                  <span className="text-slate-400 text-[11px]">Read aloud, then rate how clearly you pronounced:</span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      onClick={() => handleSelfRating(star)}
+                      className="p-1 hover:scale-110 transition-transform cursor-pointer"
+                      title={`Rate ${star} star(s)`}
+                    >
+                      <Star
+                        className={`w-5 h-5 ${
+                          (selfRating || 0) >= star
+                            ? 'text-amber-500 fill-amber-500'
+                            : 'text-slate-300'
+                        }`}
+                      />
+                    </button>
+                  ))}
+                  {selfRating && (
+                    <span className="ml-1 text-[11px] font-bold text-amber-600">
+                      {selfRating * 20}%
+                    </span>
+                  )}
+                </div>
+              </div>
 
               {/* Live transcript display while speaking */}
               {spokenTranscript && (
