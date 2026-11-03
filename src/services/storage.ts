@@ -33,6 +33,7 @@ export const DEFAULT_PROGRESS: UserProgress = {
   settings: {
     userName: 'Learner',
     dailyGoalMinutes: 15,
+    voiceId: 'us-female',
     voiceGender: 'female',
     voiceAccent: 'en-US',
     speechRate: 1.0,

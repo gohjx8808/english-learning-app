@@ -75,7 +75,8 @@ export const VocabularyView: React.FC<VocabularyViewProps> = ({
   const handlePronounce = (text: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     speakText(text, {
-      rate: progress.settings.speechRate,
+      voiceId: progress.settings.voiceId || 'us-female',
+      speed: progress.settings.speechRate,
       accent: progress.settings.voiceAccent,
     });
   };

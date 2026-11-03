@@ -1,19 +1,233 @@
 /**
- * Web Speech API and Audio Services
+ * High-Quality Natural Voice Speech Engine & Audio Services
+ * Integrates Gemini Neural TTS via server-side /api/tts with intelligent caching,
+ * pitch-preserving speed controls, and seamless Web Speech API fallback.
  */
 
-export interface SpeechOptions {
-  rate?: number;
-  pitch?: number;
-  voiceGender?: 'female' | 'male';
-  accent?: 'en-US' | 'en-GB';
-  onEnd?: () => void;
-  onError?: (err: unknown) => void;
+import { VoiceProfileId } from '../types';
+
+export interface NaturalVoiceOption {
+  id: VoiceProfileId;
+  name: string;
+  label: string;
+  gender: 'female' | 'male';
+  accent: 'en-US' | 'en-GB';
+  accentLabel: string;
+  description: string;
+  previewText: string;
 }
 
+export const NATURAL_VOICE_OPTIONS: NaturalVoiceOption[] = [
+  {
+    id: 'us-female',
+    name: 'Sarah',
+    label: 'Sarah (US Female)',
+    gender: 'female',
+    accent: 'en-US',
+    accentLabel: 'American English (美式)',
+    description: 'Warm, clear, and encouraging American English teacher voice',
+    previewText: 'Hello! I am Sarah, your American English teacher. Consistent daily practice brings natural fluency!',
+  },
+  {
+    id: 'us-male',
+    name: 'Michael',
+    label: 'Michael (US Male)',
+    gender: 'male',
+    accent: 'en-US',
+    accentLabel: 'American English (美式)',
+    description: 'Friendly, natural American conversational instructor',
+    previewText: 'Hi there! I am Michael. Let us practice English together step by step today.',
+  },
+  {
+    id: 'uk-female',
+    name: 'Emma',
+    label: 'Emma (UK Female)',
+    gender: 'female',
+    accent: 'en-GB',
+    accentLabel: 'British English (英式)',
+    description: 'Articulate, elegant British RP teacher voice with clear enunciation',
+    previewText: 'Good day! I am Emma. Welcome to your British English listening and speaking lesson.',
+  },
+  {
+    id: 'uk-male',
+    name: 'Oliver',
+    label: 'Oliver (UK Male)',
+    gender: 'male',
+    accent: 'en-GB',
+    accentLabel: 'British English (英式)',
+    description: 'Warm, thoughtful British English language instructor',
+    previewText: 'Hello! I am Oliver. Take your time, listen carefully, and repeat after me.',
+  },
+];
+
+export interface PlaybackOptions {
+  voiceId?: VoiceProfileId;
+  speed?: number; // 0.75, 1.0, 1.25, 1.5
+  accent?: 'en-US' | 'en-GB';
+  voiceGender?: 'female' | 'male';
+  onStart?: () => void;
+  onEnd?: () => void;
+  onError?: (err: unknown) => void;
+  onPause?: () => void;
+  onResume?: () => void;
+}
+
+// Client-side in-memory Audio Cache
+const clientAudioCache = new Map<string, string>();
+
+// Global Active Audio Player Instance
+let currentAudio: HTMLAudioElement | null = null;
+let currentAbortController: AbortController | null = null;
+let isSyntheticSpeaking = false;
+
+export function stopCurrentAudio(): void {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+    currentAudio = null;
+  }
+  if (currentAbortController) {
+    currentAbortController.abort();
+    currentAbortController = null;
+  }
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+  isSyntheticSpeaking = false;
+}
+
+export function pauseCurrentAudio(): void {
+  if (currentAudio && !currentAudio.paused) {
+    currentAudio.pause();
+  } else if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking) {
+    window.speechSynthesis.pause();
+  }
+}
+
+export function resumeCurrentAudio(): void {
+  if (currentAudio && currentAudio.paused) {
+    currentAudio.play().catch(console.warn);
+  } else if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.paused) {
+    window.speechSynthesis.resume();
+  }
+}
+
+export function isAudioPlaying(): boolean {
+  if (currentAudio && !currentAudio.paused && !currentAudio.ended) return true;
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking && !window.speechSynthesis.paused) return true;
+  return false;
+}
+
+export function isAudioPaused(): boolean {
+  if (currentAudio && currentAudio.paused && currentAudio.currentTime > 0 && !currentAudio.ended) return true;
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.paused) return true;
+  return false;
+}
+
+/**
+ * High-Quality Natural Voice Player
+ * Tries server-side Gemini TTS first; automatically falls back to browser SpeechSynthesis.
+ */
+export async function playNaturalVoice(
+  text: string,
+  options: PlaybackOptions = {}
+): Promise<HTMLAudioElement | null> {
+  const cleanText = text.trim();
+  if (!cleanText) return null;
+
+  stopCurrentAudio();
+
+  const voiceId = options.voiceId || 'us-female';
+  const speed = options.speed || 1.0;
+  const cacheKey = `${voiceId}:::${cleanText.toLowerCase()}`;
+
+  // Check client memory cache
+  const cachedUrl = clientAudioCache.get(cacheKey);
+  if (cachedUrl) {
+    return playAudioUrl(cachedUrl, speed, options);
+  }
+
+  // Request high-quality audio from backend proxy
+  try {
+    currentAbortController = new AbortController();
+    const response = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: cleanText,
+        voiceId,
+      }),
+      signal: currentAbortController.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: Failed to fetch TTS`);
+    }
+
+    const data = await response.json();
+
+    // If backend reports fallback or error, use browser SpeechSynthesis
+    if (data.fallback || !data.audioBase64) {
+      console.info('Using browser speech synthesis fallback:', data.message || data.error);
+      speakTextWithBrowser(cleanText, options);
+      return null;
+    }
+
+    const audioUrl = `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`;
+    clientAudioCache.set(cacheKey, audioUrl);
+
+    return playAudioUrl(audioUrl, speed, options);
+  } catch (err: any) {
+    if (err.name === 'AbortError') return null;
+    console.warn('TTS API error, falling back to browser speech synthesis:', err?.message || err);
+    speakTextWithBrowser(cleanText, options);
+    return null;
+  }
+}
+
+function playAudioUrl(
+  url: string,
+  speed: number,
+  options: PlaybackOptions
+): HTMLAudioElement {
+  const audio = new Audio(url);
+  currentAudio = audio;
+
+  // Preserve pitch during speed adjustments
+  audio.preservesPitch = true;
+  audio.playbackRate = speed;
+
+  audio.onplay = () => {
+    options.onStart?.();
+  };
+
+  audio.onended = () => {
+    if (currentAudio === audio) {
+      currentAudio = null;
+    }
+    options.onEnd?.();
+  };
+
+  audio.onerror = (e) => {
+    console.warn('Audio playback error', e);
+    if (currentAudio === audio) {
+      currentAudio = null;
+    }
+    options.onError?.(e);
+  };
+
+  audio.play().catch((err) => {
+    console.warn('Audio play request interrupted or prevented:', err);
+    options.onError?.(err);
+  });
+
+  return audio;
+}
+
+// Fallback SpeechSynthesis
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
-function loadVoices(): Promise<SpeechSynthesisVoice[]> {
+function loadBrowserVoices(): Promise<SpeechSynthesisVoice[]> {
   return new Promise((resolve) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       resolve([]);
@@ -29,38 +243,39 @@ function loadVoices(): Promise<SpeechSynthesisVoice[]> {
       cachedVoices = window.speechSynthesis.getVoices();
       resolve(cachedVoices);
     };
-    // fallback timeout
     setTimeout(() => {
       cachedVoices = window.speechSynthesis.getVoices();
       resolve(cachedVoices);
-    }, 500);
+    }, 400);
   });
 }
 
-// Preload voices
 if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-  loadVoices();
+  loadBrowserVoices();
 }
 
-export async function speakText(text: string, options: SpeechOptions = {}): Promise<void> {
+export async function speakTextWithBrowser(
+  text: string,
+  options: PlaybackOptions = {}
+): Promise<void> {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-    console.warn('SpeechSynthesis is not supported in this browser.');
     options.onError?.(new Error('SpeechSynthesis not supported'));
     return;
   }
 
-  window.speechSynthesis.cancel(); // Stop any pending speech
+  window.speechSynthesis.cancel();
+  isSyntheticSpeaking = true;
 
-  const voices = cachedVoices.length > 0 ? cachedVoices : await loadVoices();
+  const voices = cachedVoices.length > 0 ? cachedVoices : await loadBrowserVoices();
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = options.rate ?? 1.0;
-  utterance.pitch = options.pitch ?? 1.0;
+  utterance.rate = options.speed || 1.0;
 
-  // Pick suitable English voice
-  const langTarget = options.accent ?? 'en-US';
+  const accent = options.accent || (options.voiceId?.startsWith('uk') ? 'en-GB' : 'en-US');
   const englishVoices = voices.filter((v) => v.lang.startsWith('en'));
 
-  let matchedVoice = englishVoices.find((v) => v.lang.includes(langTarget.replace('-', '_')) || v.lang.includes(langTarget));
+  let matchedVoice = englishVoices.find(
+    (v) => v.lang.includes(accent.replace('-', '_')) || v.lang.includes(accent)
+  );
   if (!matchedVoice && englishVoices.length > 0) {
     matchedVoice = englishVoices[0];
   }
@@ -68,29 +283,46 @@ export async function speakText(text: string, options: SpeechOptions = {}): Prom
   if (matchedVoice) {
     utterance.voice = matchedVoice;
   }
-  utterance.lang = langTarget;
+  utterance.lang = accent;
+
+  utterance.onstart = () => {
+    options.onStart?.();
+  };
 
   utterance.onend = () => {
+    isSyntheticSpeaking = false;
     options.onEnd?.();
   };
+
   utterance.onerror = (e) => {
-    console.warn('Speech synthesis error', e);
+    isSyntheticSpeaking = false;
     options.onError?.(e);
   };
 
   window.speechSynthesis.speak(utterance);
 }
 
+/**
+ * Universal Speak Function:
+ * Automatically uses natural voice with user settings and falls back if needed.
+ */
+export async function speakText(
+  text: string,
+  options: PlaybackOptions = {}
+): Promise<void> {
+  await playNaturalVoice(text, options);
+}
+
 export function stopSpeech(): void {
-  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
-  }
+  stopCurrentAudio();
 }
 
 // Simple Web Audio API sound effects for quizzes
 export function playSound(type: 'correct' | 'wrong' | 'complete'): void {
   try {
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioContextClass) return;
     const ctx = new AudioContextClass();
     const now = ctx.currentTime;
@@ -133,9 +365,7 @@ export function playSound(type: 'correct' | 'wrong' | 'complete'): void {
         osc.stop(now + i * 0.08 + 0.25);
       });
     }
-  } catch {
-    // Audio context may not be allowed before user interaction
-  }
+  } catch {}
 }
 
 // Compare spoken text with target text
@@ -153,19 +383,20 @@ export function evaluateSpokenSentence(target: string, spoken: string): {
 
   const tokenAnalysis = targetWords.map((word) => {
     const cleaned = cleanWord(word);
-    // Exact or loose match
-    const matched = spokenSet.has(cleaned) || spokenWords.some((sw) => {
-      if (sw === cleaned) return true;
-      if (cleaned.length > 3 && sw.includes(cleaned)) return true;
-      if (sw.length > 3 && cleaned.includes(sw)) return true;
-      return false;
-    });
+    const matched =
+      spokenSet.has(cleaned) ||
+      spokenWords.some((sw) => {
+        if (sw === cleaned) return true;
+        if (cleaned.length > 3 && sw.includes(cleaned)) return true;
+        if (sw.length > 3 && cleaned.includes(sw)) return true;
+        return false;
+      });
     if (matched) matchCount++;
     return { word, matched };
   });
 
-  const rawScore = targetWords.length > 0 ? Math.round((matchCount / targetWords.length) * 100) : 0;
-  // Soft curve for non-native speech learners
+  const rawScore =
+    targetWords.length > 0 ? Math.round((matchCount / targetWords.length) * 100) : 0;
   const score = Math.min(100, Math.max(0, rawScore));
   const isGood = score >= 75;
 

@@ -41,7 +41,8 @@ export const GrammarView: React.FC<GrammarViewProps> = ({
 
   const handlePronounce = (text: string) => {
     speakText(text, {
-      rate: progress.settings.speechRate,
+      voiceId: progress.settings.voiceId || 'us-female',
+      speed: progress.settings.speechRate,
       accent: progress.settings.voiceAccent,
     });
   };

@@ -43,7 +43,8 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
 
   const handlePronounce = (text: string) => {
     speakText(text, {
-      rate: progress.settings.speechRate,
+      voiceId: progress.settings.voiceId || 'us-female',
+      speed: progress.settings.speechRate,
       accent: progress.settings.voiceAccent,
     });
   };

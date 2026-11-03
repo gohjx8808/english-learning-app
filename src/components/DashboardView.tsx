@@ -68,7 +68,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const handlePlayQuoteAudio = () => {
     speakText(dailyQuote.en, {
-      rate: progress.settings.speechRate,
+      voiceId: progress.settings.voiceId || 'us-female',
+      speed: progress.settings.speechRate || 1.0,
       accent: progress.settings.voiceAccent,
     });
   };

@@ -121,12 +121,15 @@ export interface ActivityLog {
   details?: string;
 }
 
+export type VoiceProfileId = 'us-female' | 'us-male' | 'uk-female' | 'uk-male';
+
 export interface UserSettings {
   userName: string;
   dailyGoalMinutes: number;
+  voiceId?: VoiceProfileId;
   voiceGender: 'female' | 'male';
   voiceAccent: 'en-US' | 'en-GB';
-  speechRate: number; // 0.8, 1.0, 1.2
+  speechRate: number; // 0.75, 1.0, 1.25, 1.5
   bilingualMode: 'both' | 'click' | 'english-only';
   soundEffects: boolean;
 }

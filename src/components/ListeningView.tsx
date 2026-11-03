@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ListeningLesson, ListeningSentence, UserProgress } from '../types';
+import { ListeningLesson, ListeningSentence, UserProgress, VoiceProfileId } from '../types';
 import { 
   Play, 
   Pause, 
+  Square,
   RotateCcw, 
   Upload, 
   Plus, 
@@ -11,15 +12,24 @@ import {
   Repeat, 
   BookOpen, 
   FileAudio, 
-  Trash2, 
   Edit3, 
   Check, 
-  Clock, 
   Sparkles,
-  Info
+  Eye,
+  EyeOff,
+  Radio,
+  Headphones
 } from 'lucide-react';
-import { speakText, stopSpeech } from '../services/speech';
-import { saveAudioFile, getAudioFile, deleteAudioFile } from '../services/storage';
+import { 
+  playNaturalVoice, 
+  stopCurrentAudio, 
+  pauseCurrentAudio, 
+  resumeCurrentAudio, 
+  isAudioPlaying, 
+  isAudioPaused,
+  NATURAL_VOICE_OPTIONS 
+} from '../services/speech';
+import { saveAudioFile, getAudioFile } from '../services/storage';
 
 interface ListeningViewProps {
   lessons: ListeningLesson[];
@@ -39,22 +49,36 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
   const [selectedLessonId, setSelectedLessonId] = useState<string>(lessons[0]?.id || '');
   const activeLesson = lessons.find((l) => l.id === selectedLessonId) || lessons[0];
 
-  // Audio playback states
+  // Active voice selection for this session
+  const [activeVoiceId, setActiveVoiceId] = useState<VoiceProfileId>(
+    progress.settings.voiceId || 'us-female'
+  );
+
+  // Playback control states
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(progress.settings.speechRate || 1.0);
   const [activeSentenceId, setActiveSentenceId] = useState<string | null>(null);
   const [repeatSentenceMode, setRepeatSentenceMode] = useState(false);
+  
+  // Learning experience toggles
   const [showChineseTranslation, setShowChineseTranslation] = useState(true);
+  const [isBlindTestMode, setIsBlindTestMode] = useState(false); // Hide transcript for listening comprehension test
+  const [audioSourceMode, setAudioSourceMode] = useState<'ai-voice' | 'uploaded-mp3'>('ai-voice');
 
   // Loaded MP3 URL from user upload (via Blob ObjectURL)
   const [loadedAudioUrl, setLoadedAudioUrl] = useState<string | null>(null);
   const [audioFileName, setAudioFileName] = useState<string | null>(null);
 
-  // Audio element ref
+  // Audio element ref for MP3
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sentence sequence index for AI voice playback
+  const sequenceIndexRef = useRef<number>(0);
+  const isSequenceActiveRef = useRef<boolean>(false);
 
   // Edit / Add modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -66,15 +90,12 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
   const [editVocabText, setEditVocabText] = useState('');
   const [editUploadedFile, setEditUploadedFile] = useState<File | null>(null);
 
-  // Load custom audio file from IndexedDB when active lesson changes
+  // Load custom MP3 from IndexedDB if available
   useEffect(() => {
     let currentBlobUrl: string | null = null;
     let isCancelled = false;
 
-    setIsPlaying(false);
-    stopSpeech();
-    setCurrentTime(0);
-    setActiveSentenceId(null);
+    stopPlayback();
 
     const loadLessonAudio = async () => {
       if (!activeLesson) return;
@@ -83,10 +104,12 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
       if (blob && !isCancelled) {
         currentBlobUrl = URL.createObjectURL(blob);
         setLoadedAudioUrl(currentBlobUrl);
-        setAudioFileName(activeLesson.audioFileName || 'uploaded_lesson_audio.mp3');
+        setAudioFileName(activeLesson.audioFileName || 'custom_lesson_audio.mp3');
+        setAudioSourceMode('uploaded-mp3');
       } else if (!isCancelled) {
         setLoadedAudioUrl(null);
         setAudioFileName(null);
+        setAudioSourceMode('ai-voice');
       }
     };
 
@@ -100,7 +123,14 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
     };
   }, [activeLesson?.id]);
 
-  // Audio player timeupdate listener
+  // Sync active voice with progress settings if updated
+  useEffect(() => {
+    if (progress.settings.voiceId) {
+      setActiveVoiceId(progress.settings.voiceId);
+    }
+  }, [progress.settings.voiceId]);
+
+  // Audio player timeupdate listener for uploaded MP3
   const handleTimeUpdate = () => {
     if (!audioRef.current) return;
     const time = audioRef.current.currentTime;
@@ -114,7 +144,6 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
       if (match) {
         setActiveSentenceId(match.id);
         if (repeatSentenceMode && time >= match.endTime) {
-          // Loop current sentence
           audioRef.current.currentTime = match.startTime;
         }
       }
@@ -129,108 +158,173 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
 
   const handleAudioEnded = () => {
     setIsPlaying(false);
+    setIsPaused(false);
     setActiveSentenceId(null);
     onLogActivity('Finished Listening Lesson', '完成听力练习', activeLesson.title);
   };
 
-  // Play / Pause toggle
-  const togglePlay = () => {
-    if (loadedAudioUrl && audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-        setIsPlaying(false);
+  // Play / Pause / Resume controls
+  const handlePlay = () => {
+    if (isPaused) {
+      // Resume
+      if (audioSourceMode === 'uploaded-mp3' && audioRef.current) {
+        audioRef.current.play();
       } else {
-        audioRef.current.playbackRate = playbackSpeed;
-        audioRef.current.play().then(() => {
-          setIsPlaying(true);
-        }).catch((err) => {
-          console.warn('Audio play error:', err);
-        });
+        resumeCurrentAudio();
       }
-    } else {
-      // Fallback: Web Speech API narration of all dialogue sentences
-      if (isPlaying) {
-        stopSpeech();
-        setIsPlaying(false);
-      } else {
+      setIsPlaying(true);
+      setIsPaused(false);
+      return;
+    }
+
+    if (audioSourceMode === 'uploaded-mp3' && loadedAudioUrl && audioRef.current) {
+      audioRef.current.playbackRate = playbackSpeed;
+      audioRef.current.play().then(() => {
         setIsPlaying(true);
-        playSpeechSequence(0);
-      }
+        setIsPaused(false);
+      }).catch(console.warn);
+    } else {
+      // Natural AI Voice Sequence
+      isSequenceActiveRef.current = true;
+      setIsPlaying(true);
+      setIsPaused(false);
+      const startIndex = activeSentenceId 
+        ? Math.max(0, activeLesson.sentences.findIndex((s) => s.id === activeSentenceId))
+        : 0;
+      playSentenceSequence(startIndex);
     }
   };
 
-  // Helper for sequential speech synthesis when no MP3 is uploaded
-  const playSpeechSequence = (idx: number) => {
-    if (!activeLesson?.sentences || idx >= activeLesson.sentences.length) {
-      setIsPlaying(false);
-      setActiveSentenceId(null);
-      return;
+  const handlePause = () => {
+    if (audioSourceMode === 'uploaded-mp3' && audioRef.current) {
+      audioRef.current.pause();
+    } else {
+      pauseCurrentAudio();
     }
-    const sentence = activeLesson.sentences[idx];
-    setActiveSentenceId(sentence.id);
+    setIsPlaying(false);
+    setIsPaused(true);
+  };
 
-    speakText(sentence.en, {
-      rate: playbackSpeed,
-      accent: progress.settings.voiceAccent,
-      onEnd: () => {
-        if (repeatSentenceMode) {
-          playSpeechSequence(idx);
-        } else {
-          playSpeechSequence(idx + 1);
-        }
-      },
-      onError: () => {
-        setIsPlaying(false);
-      },
-    });
+  const stopPlayback = () => {
+    isSequenceActiveRef.current = false;
+    stopCurrentAudio();
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    setIsPlaying(false);
+    setIsPaused(false);
+    setActiveSentenceId(null);
+    setCurrentTime(0);
   };
 
   const handleReplay = () => {
-    if (loadedAudioUrl && audioRef.current) {
+    stopPlayback();
+    if (audioSourceMode === 'uploaded-mp3' && audioRef.current) {
       audioRef.current.currentTime = 0;
       audioRef.current.play();
       setIsPlaying(true);
     } else {
-      stopSpeech();
+      isSequenceActiveRef.current = true;
       setIsPlaying(true);
-      playSpeechSequence(0);
+      playSentenceSequence(0);
     }
   };
 
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newTime = parseFloat(e.target.value);
-    setCurrentTime(newTime);
-    if (audioRef.current) {
-      audioRef.current.currentTime = newTime;
+  // Sequential Natural Voice Playback
+  const playSentenceSequence = async (idx: number) => {
+    if (!isSequenceActiveRef.current) return;
+    if (!activeLesson?.sentences || idx >= activeLesson.sentences.length) {
+      setIsPlaying(false);
+      setIsPaused(false);
+      setActiveSentenceId(null);
+      isSequenceActiveRef.current = false;
+      onLogActivity('Completed Listening Passage', '听完完整语篇', activeLesson.title);
+      return;
     }
+
+    sequenceIndexRef.current = idx;
+    const sentence = activeLesson.sentences[idx];
+    setActiveSentenceId(sentence.id);
+
+    // Speak single sentence using high-quality neural voice
+    await playNaturalVoice(sentence.en, {
+      voiceId: activeVoiceId,
+      speed: playbackSpeed,
+      onEnd: () => {
+        if (!isSequenceActiveRef.current) return;
+        if (repeatSentenceMode) {
+          playSentenceSequence(idx);
+        } else {
+          // Natural slight pause between sentences (500ms)
+          setTimeout(() => {
+            if (isSequenceActiveRef.current) {
+              playSentenceSequence(idx + 1);
+            }
+          }, 500);
+        }
+      },
+      onError: () => {
+        setIsPlaying(false);
+        setIsPaused(false);
+      },
+    });
   };
 
   const handleSpeedChange = (speed: number) => {
     setPlaybackSpeed(speed);
     if (audioRef.current) {
+      audioRef.current.preservesPitch = true;
       audioRef.current.playbackRate = speed;
     }
+    // Update setting preference
+    onUpdateProgress({
+      ...progress,
+      settings: {
+        ...progress.settings,
+        speechRate: speed,
+      },
+    });
   };
 
-  // Repeat or jump to specific sentence
-  const handleSelectSentence = (sentence: ListeningSentence) => {
+  // Switch voice selection and update setting
+  const handleVoiceChange = (vId: VoiceProfileId) => {
+    setActiveVoiceId(vId);
+    onUpdateProgress({
+      ...progress,
+      settings: {
+        ...progress.settings,
+        voiceId: vId,
+      },
+    });
+  };
+
+  // Click individual sentence to hear and repeat it
+  const handleSelectSentence = async (sentence: ListeningSentence) => {
     setActiveSentenceId(sentence.id);
-    if (loadedAudioUrl && audioRef.current) {
+
+    if (audioSourceMode === 'uploaded-mp3' && loadedAudioUrl && audioRef.current) {
       audioRef.current.currentTime = sentence.startTime;
       if (!isPlaying) {
         audioRef.current.play();
         setIsPlaying(true);
+        setIsPaused(false);
       }
     } else {
-      stopSpeech();
-      speakText(sentence.en, {
-        rate: playbackSpeed,
-        accent: progress.settings.voiceAccent,
+      isSequenceActiveRef.current = false;
+      setIsPlaying(true);
+      setIsPaused(false);
+      await playNaturalVoice(sentence.en, {
+        voiceId: activeVoiceId,
+        speed: playbackSpeed,
+        onEnd: () => {
+          setIsPlaying(false);
+        },
       });
     }
   };
 
-  // Handle direct MP3 File Upload from computer
+  // Direct MP3 upload handler
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activeLesson) return;
@@ -242,8 +336,8 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
       const objectUrl = URL.createObjectURL(file);
       setLoadedAudioUrl(objectUrl);
       setAudioFileName(file.name);
+      setAudioSourceMode('uploaded-mp3');
 
-      // Update lesson metadata
       const updatedLessons = lessons.map((l) =>
         l.id === activeLesson.id
           ? { ...l, audioKey: storageKey, audioFileName: file.name }
@@ -279,16 +373,16 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // Open modal to add or edit lesson
+  // Add / Edit modal helpers
   const openCreateModal = () => {
     setModalMode('create');
     setEditTitle('');
     setEditTitleZh('');
     setEditLevel('A2');
     setEditSentencesText(
-      'Person A: Hello, how are you today?\nPerson B: I am great, thank you! Ready for our English practice.'
+      'Person A: Good morning! How was your trip? // 早上好！你的旅程怎么样？\nPerson B: It was fantastic, thank you! I loved the historic castle. // 太棒了，谢谢！我很喜欢那座历史悠久的城堡。'
     );
-    setEditVocabText('practice: 练习\nfluent: 流利的');
+    setEditVocabText('fantastic: 极好的\nhistoric: 历史悠久的');
     setEditUploadedFile(null);
     setIsModalOpen(true);
   };
@@ -312,7 +406,6 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
   const handleSaveModal = async () => {
     if (!editTitle.trim()) return;
 
-    // Parse sentences
     const lines = editSentencesText.split('\n').filter((l) => l.trim().length > 0);
     let cumulativeTime = 0;
     const parsedSentences: ListeningSentence[] = lines.map((line, idx) => {
@@ -331,7 +424,6 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
       };
     });
 
-    // Parse vocabulary
     const vocabLines = editVocabText.split('\n').filter((l) => l.trim().length > 0);
     const parsedVocab = vocabLines.map((vl) => {
       const [w, m] = vl.split(':');
@@ -376,17 +468,25 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
     setIsModalOpen(false);
   };
 
+  const selectedVoiceMeta = NATURAL_VOICE_OPTIONS.find((v) => v.id === activeVoiceId);
+
   return (
     <div className="space-y-6">
       
-      {/* 1. Header & Actions */}
+      {/* 1. Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-            Listening Practice · 听力专练
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Real English audio with synchronized bilingual transcripts and sentence repeat practice.
+          <div className="flex items-center gap-2 mb-1">
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+              Listening Practice · 听力训练
+            </h1>
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-sky-500" />
+              Neural Voices Active
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500">
+            Natural human-like teacher narration, sentence-by-sentence repeat, and blind comprehension test mode.
           </p>
         </div>
 
@@ -427,7 +527,7 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
         })}
       </div>
 
-      {/* 3. Main Player & Transcript Card */}
+      {/* 3. Main Audio Player & Transcript */}
       {activeLesson && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
@@ -437,6 +537,7 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
             {/* Audio Controller Card */}
             <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-5">
               
+              {/* Lesson Title & Controls */}
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="flex items-center gap-2">
@@ -470,40 +571,65 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                 </div>
               </div>
 
-              {/* Upload MP3 status / Drop zone banner */}
-              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-2 text-slate-700">
-                  <FileAudio className="w-4 h-4 text-sky-600 shrink-0" />
+              {/* Natural Voice Selector Bar */}
+              <div className="p-3.5 rounded-2xl bg-sky-50/70 border border-sky-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-sky-500 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                    AI
+                  </div>
                   <div>
-                    {audioFileName ? (
-                      <span className="font-semibold text-slate-800">
-                        Active Audio: <span className="font-normal text-slate-600">{audioFileName}</span>
-                      </span>
-                    ) : (
-                      <span>
-                        <span className="font-semibold text-slate-800">Ready to play</span> (Upload your MP3 or use built-in narration)
-                      </span>
-                    )}
+                    <span className="font-semibold text-slate-900">
+                      Teacher Voice: {selectedVoiceMeta?.label}
+                    </span>
+                    <span className="text-slate-500 block text-[11px]">
+                      {selectedVoiceMeta?.description}
+                    </span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="audio/mp3,audio/*"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:border-sky-300 hover:bg-sky-50 text-slate-700 text-xs font-semibold rounded-lg transition-all cursor-pointer shadow-2xs"
-                  >
-                    <Upload className="w-3.5 h-3.5 text-sky-600" />
-                    <span>{audioFileName ? 'Replace MP3 File' : 'Upload MP3 File'}</span>
-                  </button>
+                {/* Voice Toggle Buttons */}
+                <div className="flex items-center gap-1 p-0.5 bg-white rounded-xl border border-sky-200">
+                  {NATURAL_VOICE_OPTIONS.map((v) => (
+                    <button
+                      key={v.id}
+                      onClick={() => handleVoiceChange(v.id)}
+                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition-colors cursor-pointer ${
+                        activeVoiceId === v.id
+                          ? 'bg-sky-500 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                      title={v.description}
+                    >
+                      {v.name}
+                    </button>
+                  ))}
                 </div>
               </div>
+
+              {/* Uploaded MP3 Mode Switcher (if user uploaded an MP3 file) */}
+              {loadedAudioUrl && (
+                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 text-slate-700">
+                    <FileAudio className="w-4 h-4 text-purple-600 shrink-0" />
+                    <span>
+                      MP3 Loaded: <span className="font-semibold text-slate-900">{audioFileName}</span>
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setAudioSourceMode(audioSourceMode === 'ai-voice' ? 'uploaded-mp3' : 'ai-voice')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold text-xs transition-colors cursor-pointer ${
+                        audioSourceMode === 'uploaded-mp3'
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {audioSourceMode === 'uploaded-mp3' ? 'Playing MP3' : 'Switch to MP3'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Hidden HTML5 Audio Element for user uploaded MP3 */}
               {loadedAudioUrl && (
@@ -516,57 +642,92 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                 />
               )}
 
-              {/* Progress Seek Bar */}
+              {/* Playback Progress Indicator for Sentence Sequence */}
               <div className="space-y-1.5">
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 60}
-                  step={0.1}
-                  value={currentTime}
-                  onChange={handleSeek}
-                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-sky-500"
-                />
-                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                  <span>{formatSeconds(currentTime)}</span>
-                  <span>{formatSeconds(duration || 60)}</span>
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <span className="font-medium">
+                    {activeSentenceId 
+                      ? `Sentence ${(activeLesson.sentences.findIndex((s) => s.id === activeSentenceId) + 1)} of ${activeLesson.sentences.length}`
+                      : 'Entire Passage Flow'}
+                  </span>
+                  <span className="text-[11px] font-mono text-slate-400">
+                    Est. {activeLesson.duration}
+                  </span>
+                </div>
+
+                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                  <div 
+                    className="bg-sky-500 h-1.5 rounded-full transition-all duration-300"
+                    style={{
+                      width: activeSentenceId 
+                        ? `${(((activeLesson.sentences.findIndex((s) => s.id === activeSentenceId) + 1) / activeLesson.sentences.length) * 100)}%`
+                        : isPlaying ? '100%' : '0%'
+                    }}
+                  />
                 </div>
               </div>
 
-              {/* Playback Controls & Speed */}
-              <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
-                <div className="flex items-center gap-3">
+              {/* Comprehensive Audio Controls: Play, Pause, Resume, Stop, Replay, Repeat */}
+              <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
+                
+                <div className="flex items-center gap-2.5">
+                  
+                  {/* Replay */}
                   <button
                     onClick={handleReplay}
                     className="p-2.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
-                    title="Replay from start"
+                    title="Replay from beginning"
                   >
                     <RotateCcw className="w-5 h-5" />
                   </button>
 
-                  <button
-                    onClick={togglePlay}
-                    className="p-4 bg-sky-500 hover:bg-sky-600 text-white rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer"
-                    title={isPlaying ? 'Pause' : 'Play'}
-                  >
-                    {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 fill-white" />}
-                  </button>
+                  {/* Play / Pause / Resume */}
+                  {isPlaying ? (
+                    <button
+                      onClick={handlePause}
+                      className="p-3.5 bg-sky-500 hover:bg-sky-600 text-white rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer"
+                      title="Pause"
+                    >
+                      <Pause className="w-6 h-6" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handlePlay}
+                      className="p-3.5 bg-sky-500 hover:bg-sky-600 text-white rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer"
+                      title={isPaused ? 'Resume' : 'Play'}
+                    >
+                      <Play className="w-6 h-6 fill-white" />
+                    </button>
+                  )}
 
+                  {/* Stop */}
+                  {(isPlaying || isPaused) && (
+                    <button
+                      onClick={stopPlayback}
+                      className="p-2.5 text-slate-600 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                      title="Stop playback"
+                    >
+                      <Square className="w-5 h-5" />
+                    </button>
+                  )}
+
+                  {/* Repeat Sentence Mode */}
                   <button
                     onClick={() => setRepeatSentenceMode(!repeatSentenceMode)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer ${
                       repeatSentenceMode
-                        ? 'bg-sky-50 text-sky-700 border-sky-300'
+                        ? 'bg-sky-50 text-sky-700 border-sky-300 font-semibold'
                         : 'text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
-                    title="Loop current sentence"
+                    title="Loop current sentence continuously"
                   >
                     <Repeat className="w-3.5 h-3.5" />
                     <span>Repeat Sentence (单句循环)</span>
                   </button>
+
                 </div>
 
-                {/* Speed Toggles */}
+                {/* Pitch-Preserving Speed Controls */}
                 <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
                   {[0.75, 1.0, 1.25, 1.5].map((spd) => (
                     <button
@@ -582,84 +743,171 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                     </button>
                   ))}
                 </div>
+
               </div>
 
             </div>
 
-            {/* Transcript Sentence List */}
+            {/* Transcript & Blind Test View */}
             <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-4">
+              
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                 <div className="flex items-center gap-2">
+                  <Headphones className="w-4 h-4 text-sky-600" />
                   <h3 className="text-sm font-bold text-slate-900">
-                    Interactive Transcript · 对话字幕
+                    Bilingual Dialogue Transcript
                   </h3>
-                  <span className="text-xs text-slate-400">
-                    (Click any sentence to play & repeat)
-                  </span>
                 </div>
 
-                <button
-                  onClick={() => setShowChineseTranslation(!showChineseTranslation)}
-                  className="text-xs text-sky-600 hover:underline font-medium cursor-pointer"
-                >
-                  {showChineseTranslation ? 'Hide Translations' : 'Show Translations'}
-                </button>
+                {/* Blind Listening Test & Translation Toggles */}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setIsBlindTestMode(!isBlindTestMode)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                      isBlindTestMode
+                        ? 'bg-amber-50 text-amber-800 border-amber-300'
+                        : 'text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                    title="Hide transcript to test pure listening comprehension"
+                  >
+                    {isBlindTestMode ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                    <span>{isBlindTestMode ? 'Exit Blind Test' : 'Blind Test Mode (盲听测试)'}</span>
+                  </button>
+
+                  {!isBlindTestMode && (
+                    <button
+                      onClick={() => setShowChineseTranslation(!showChineseTranslation)}
+                      className="text-xs text-sky-600 hover:underline font-medium cursor-pointer"
+                    >
+                      {showChineseTranslation ? 'Hide Chinese' : 'Show Chinese'}
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div className="space-y-3">
-                {activeLesson.sentences.map((sent, index) => {
-                  const isActive = activeSentenceId === sent.id;
+              {/* Blind Listening Curtain Mode */}
+              {isBlindTestMode ? (
+                <div className="py-12 px-6 text-center bg-slate-50/70 rounded-2xl border border-dashed border-slate-200 space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+                    <Headphones className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-bold text-slate-800">
+                      Blind Comprehension Mode Active (盲听训练进行中)
+                    </h4>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 leading-relaxed">
+                      Transcript is hidden. Focus purely on auditory comprehension, rhythm, and sentence stress. Click "Exit Blind Test" whenever you want to check the text.
+                    </p>
+                  </div>
+                  {activeSentenceId && (
+                    <div className="pt-2 text-xs font-semibold text-sky-600">
+                      Currently playing: Sentence {(activeLesson.sentences.findIndex((s) => s.id === activeSentenceId) + 1)}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Interactive Sentences with Sentence-by-Sentence Highlight & Replay */
+                <div className="space-y-3">
+                  {activeLesson.sentences.map((sent, index) => {
+                    const isActive = activeSentenceId === sent.id;
 
-                  return (
-                    <div
-                      key={sent.id}
-                      onClick={() => handleSelectSentence(sent)}
-                      className={`p-4 rounded-2xl border transition-all cursor-pointer ${
-                        isActive
-                          ? 'bg-sky-50/70 border-sky-300 shadow-2xs'
-                          : 'bg-white border-slate-100 hover:border-slate-200 hover:bg-slate-50/60'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="space-y-1 flex-1">
-                          <p className={`text-sm sm:text-base leading-relaxed ${
-                            isActive ? 'font-semibold text-slate-900' : 'text-slate-700'
-                          }`}>
-                            {sent.en}
-                          </p>
-                          {showChineseTranslation && (
-                            <p className="text-xs text-slate-500 leading-normal">
-                              {sent.zh}
+                    return (
+                      <div
+                        key={sent.id}
+                        onClick={() => handleSelectSentence(sent)}
+                        className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+                          isActive
+                            ? 'bg-sky-50/80 border-sky-300 shadow-2xs ring-1 ring-sky-200'
+                            : 'bg-white border-slate-100 hover:border-slate-200 hover:bg-slate-50/60'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1 flex-1">
+                            <p className={`text-sm sm:text-base leading-relaxed ${
+                              isActive ? 'font-bold text-slate-900' : 'text-slate-700'
+                            }`}>
+                              {sent.en}
                             </p>
-                          )}
-                        </div>
+                            {showChineseTranslation && (
+                              <p className="text-xs text-slate-500 leading-normal">
+                                {sent.zh}
+                              </p>
+                            )}
+                          </div>
 
-                        <div className="flex items-center gap-1 shrink-0 pt-0.5">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleSelectSentence(sent);
-                            }}
-                            className={`p-1.5 rounded-lg transition-colors ${
-                              isActive ? 'text-sky-600 bg-sky-100' : 'text-slate-400 hover:text-slate-700'
-                            }`}
-                            title="Play this sentence"
-                          >
-                            <Volume2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSelectSentence(sent);
+                              }}
+                              className={`p-2 rounded-xl transition-all cursor-pointer ${
+                                isActive 
+                                  ? 'text-white bg-sky-500 shadow-xs' 
+                                  : 'text-slate-400 hover:text-sky-600 hover:bg-sky-50'
+                              }`}
+                              title="Replay this sentence"
+                            >
+                              <Volume2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
+
             </div>
 
           </div>
 
-          {/* Right Col: Vocabulary Explanations & Notes */}
+          {/* Right Col: Teacher Voice Info & Vocabulary Explanations */}
           <div className="space-y-4">
             
+            {/* Active Voice Persona Spotlight */}
+            <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                <Sparkles className="w-4 h-4 text-amber-500" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  Voice Technology · 语音引擎
+                </h3>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Selected Voice:</span>
+                  <span className="font-semibold text-slate-800">{selectedVoiceMeta?.name}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Accent:</span>
+                  <span className="font-semibold text-slate-800">{selectedVoiceMeta?.accentLabel}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Playback Speed:</span>
+                  <span className="font-semibold text-slate-800">{playbackSpeed}x (pitch preserved)</span>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="audio/mp3,audio/*"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-xs text-sky-600 hover:underline font-semibold cursor-pointer inline-flex items-center gap-1"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Upload Custom MP3 Audio</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Key Vocabulary Drawer */}
             <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-4">
               <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
                 <BookOpen className="w-4 h-4 text-sky-600" />
@@ -668,35 +916,33 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                 </h3>
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 {activeLesson.vocabulary.map((vocab, i) => (
                   <div
                     key={i}
-                    className="p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-start justify-between gap-3"
+                    className="p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-start justify-between gap-3 text-xs"
                   >
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm text-slate-900">{vocab.word}</span>
+                        <span className="font-bold text-slate-900">{vocab.word}</span>
                         <button
-                          onClick={() => speakText(vocab.word, { accent: progress.settings.voiceAccent })}
+                          onClick={() => playNaturalVoice(vocab.word, { voiceId: activeVoiceId })}
                           className="p-1 text-slate-400 hover:text-sky-600 cursor-pointer"
+                          title="Pronounce word"
                         >
                           <Volume2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <p className="text-xs text-slate-600 mt-1">{vocab.meaningZh}</p>
+                      <p className="text-slate-600 mt-1">{vocab.meaningZh}</p>
                     </div>
                   </div>
                 ))}
               </div>
 
               <div className="p-3 bg-sky-50 rounded-2xl border border-sky-100 text-xs text-sky-800 space-y-1">
-                <div className="flex items-center gap-1 font-semibold">
-                  <Sparkles className="w-3.5 h-3.5 text-sky-600" />
-                  <span>Listening Tip</span>
-                </div>
+                <p className="font-semibold">💡 Listening Tip:</p>
                 <p className="text-[11px] leading-relaxed text-sky-700">
-                  Try listening once with Chinese translations hidden at 1.0x speed. Then click individual sentences to shadow repeat.
+                  Try listening once in Blind Test Mode without looking at the text. Then click sentences to review and repeat!
                 </p>
               </div>
             </div>
@@ -753,18 +999,6 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                   <option value="A2">A2 Elementary</option>
                   <option value="B1">B1 Intermediate</option>
                 </select>
-              </div>
-
-              <div>
-                <label className="font-semibold text-slate-700 block mb-1">
-                  Upload MP3 Audio File (Optional now, can upload anytime)
-                </label>
-                <input
-                  type="file"
-                  accept="audio/mp3,audio/*"
-                  onChange={(e) => setEditUploadedFile(e.target.files?.[0] || null)}
-                  className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-sky-50 file:text-sky-700 hover:file:bg-sky-100 cursor-pointer"
-                />
               </div>
 
               <div>

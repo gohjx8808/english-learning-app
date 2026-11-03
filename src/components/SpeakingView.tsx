@@ -99,7 +99,8 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
 
   const handlePronounce = (text: string) => {
     speakText(text, {
-      rate: progress.settings.speechRate,
+      voiceId: progress.settings.voiceId || 'us-female',
+      speed: progress.settings.speechRate,
       accent: progress.settings.voiceAccent,
     });
   };
@@ -497,6 +498,9 @@ export const SpeakingView: React.FC<SpeakingViewProps> = ({
                         </span>
                       ))}
                     </div>
+                    <p className="text-[11px] text-slate-500 pt-2 border-t border-sky-200/60 leading-relaxed">
+                      💡 <em>Educational Note: Automated speech recognition evaluates word intelligibility and phoneme recognition. For natural sentence rhythm, intonation, and stress, shadow-repeat after the neural teacher model.</em>
+                    </p>
                   </div>
                 </div>
               )}
