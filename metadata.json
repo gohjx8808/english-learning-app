@@ -1,0 +1,6 @@
+{
+  "name": "My English – Personal English Learning Platform",
+  "description": "A comprehensive bilingual English learning web application for adult A2 learners progressing towards B1, featuring vocabulary flashcards, audio listening, grammar lessons, reading comprehension, and speaking practice.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
