@@ -18,19 +18,14 @@ import {
   Eye,
   EyeOff,
   Radio,
-  Headphones
+  Headphones,
+  SkipBack,
+  SkipForward
 } from 'lucide-react';
-import { 
-  playNaturalVoice, 
-  stopCurrentAudio, 
-  pauseCurrentAudio, 
-  resumeCurrentAudio, 
-  isAudioPlaying, 
-  isAudioPaused,
-  NATURAL_VOICE_OPTIONS 
-} from '../services/speech';
+import { NATURAL_VOICE_OPTIONS } from '../services/speech';
 import { saveAudioFile, getAudioFile } from '../services/storage';
 import { TTSButton } from './TTSButton';
+import { useTTS } from '../context/TTSContext';
 
 interface ListeningViewProps {
   lessons: ListeningLesson[];
@@ -47,23 +42,45 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
   onUpdateProgress,
   onLogActivity,
 }) => {
+  const {
+    playbackState,
+    playListeningLesson,
+    pause,
+    resume,
+    stop,
+    replay,
+    nextSentence,
+    prevSentence,
+    seek,
+    seekRelative,
+    setSpeed,
+    setVoiceId,
+    setRepeatMode,
+    currentVoiceOption,
+  } = useTTS();
+
   const [selectedLessonId, setSelectedLessonId] = useState<string>(lessons[0]?.id || '');
   const activeLesson = lessons.find((l) => l.id === selectedLessonId) || lessons[0];
 
-  // Active voice selection for this session
-  const [activeVoiceId, setActiveVoiceId] = useState<VoiceProfileId>(
-    progress.settings.voiceId || 'us-female'
-  );
+  // Synchronized playback states from central playback manager
+  const isCurrentLessonActive =
+    playbackState.currentModule === 'listening' &&
+    playbackState.contentId === activeLesson?.id;
 
-  // Playback control states
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [playbackSpeed, setPlaybackSpeed] = useState<number>(progress.settings.speechRate || 1.0);
-  const [activeSentenceId, setActiveSentenceId] = useState<string | null>(null);
-  const [repeatSentenceMode, setRepeatSentenceMode] = useState(false);
-  
+  const isPlaying = isCurrentLessonActive && playbackState.status === 'playing';
+  const isPaused = isCurrentLessonActive && playbackState.status === 'paused';
+  const activeSentenceId = isCurrentLessonActive ? playbackState.currentSentenceId : null;
+  const currentTime = isCurrentLessonActive ? playbackState.currentTime : 0;
+  const duration = isCurrentLessonActive ? playbackState.duration : 0;
+  const activeVoiceId = playbackState.voiceId;
+  const playbackSpeed = playbackState.speed;
+  const repeatSentenceMode = playbackState.repeatMode;
+
+  const selectedVoiceMeta =
+    NATURAL_VOICE_OPTIONS.find((v) => v.id === activeVoiceId) ||
+    currentVoiceOption ||
+    NATURAL_VOICE_OPTIONS[0];
+
   // Learning experience toggles
   const [showChineseTranslation, setShowChineseTranslation] = useState(true);
   const [isBlindTestMode, setIsBlindTestMode] = useState(false); // Hide transcript for listening comprehension test
@@ -72,14 +89,7 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
   // Loaded MP3 URL from user upload (via Blob ObjectURL)
   const [loadedAudioUrl, setLoadedAudioUrl] = useState<string | null>(null);
   const [audioFileName, setAudioFileName] = useState<string | null>(null);
-
-  // Audio element ref for MP3
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Sentence sequence index for AI voice playback
-  const sequenceIndexRef = useRef<number>(0);
-  const isSequenceActiveRef = useRef<boolean>(false);
 
   // Edit / Add modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -95,8 +105,6 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
   useEffect(() => {
     let currentBlobUrl: string | null = null;
     let isCancelled = false;
-
-    stopPlayback();
 
     const loadLessonAudio = async () => {
       if (!activeLesson) return;
@@ -124,161 +132,46 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
     };
   }, [activeLesson?.id]);
 
-  // Sync active voice with progress settings if updated
-  useEffect(() => {
-    if (progress.settings.voiceId) {
-      setActiveVoiceId(progress.settings.voiceId);
-    }
-  }, [progress.settings.voiceId]);
-
-  // Audio player timeupdate listener for uploaded MP3
-  const handleTimeUpdate = () => {
-    if (!audioRef.current) return;
-    const time = audioRef.current.currentTime;
-    setCurrentTime(time);
-
-    // Sync active sentence based on timestamp
-    if (activeLesson?.sentences) {
-      const match = activeLesson.sentences.find(
-        (s) => time >= s.startTime && time <= s.endTime
-      );
-      if (match) {
-        setActiveSentenceId(match.id);
-        if (repeatSentenceMode && time >= match.endTime) {
-          audioRef.current.currentTime = match.startTime;
-        }
-      }
-    }
-  };
-
-  const handleLoadedMetadata = () => {
-    if (audioRef.current) {
-      setDuration(audioRef.current.duration);
-    }
-  };
-
-  const handleAudioEnded = () => {
-    setIsPlaying(false);
-    setIsPaused(false);
-    setActiveSentenceId(null);
-    onLogActivity('Finished Listening Lesson', '完成听力练习', activeLesson.title);
-  };
-
-  // Play / Pause / Resume controls
+  // Synchronized Play / Pause / Resume controls
   const handlePlay = () => {
     if (isPaused) {
-      // Resume
-      if (audioSourceMode === 'uploaded-mp3' && audioRef.current) {
-        audioRef.current.play();
-      } else {
-        resumeCurrentAudio();
-      }
-      setIsPlaying(true);
-      setIsPaused(false);
+      resume();
       return;
     }
 
-    if (audioSourceMode === 'uploaded-mp3' && loadedAudioUrl && audioRef.current) {
-      audioRef.current.playbackRate = playbackSpeed;
-      audioRef.current.play().then(() => {
-        setIsPlaying(true);
-        setIsPaused(false);
-      }).catch(console.warn);
-    } else {
-      // Natural AI Voice Sequence
-      isSequenceActiveRef.current = true;
-      setIsPlaying(true);
-      setIsPaused(false);
-      const startIndex = activeSentenceId 
-        ? Math.max(0, activeLesson.sentences.findIndex((s) => s.id === activeSentenceId))
-        : 0;
-      playSentenceSequence(startIndex);
-    }
-  };
+    const startIndex = activeSentenceId 
+      ? Math.max(0, activeLesson.sentences.findIndex((s) => s.id === activeSentenceId))
+      : 0;
 
-  const handlePause = () => {
-    if (audioSourceMode === 'uploaded-mp3' && audioRef.current) {
-      audioRef.current.pause();
-    } else {
-      pauseCurrentAudio();
-    }
-    setIsPlaying(false);
-    setIsPaused(true);
-  };
-
-  const stopPlayback = () => {
-    isSequenceActiveRef.current = false;
-    stopCurrentAudio();
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-    }
-    setIsPlaying(false);
-    setIsPaused(false);
-    setActiveSentenceId(null);
-    setCurrentTime(0);
-  };
-
-  const handleReplay = () => {
-    stopPlayback();
-    if (audioSourceMode === 'uploaded-mp3' && audioRef.current) {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play();
-      setIsPlaying(true);
-    } else {
-      isSequenceActiveRef.current = true;
-      setIsPlaying(true);
-      playSentenceSequence(0);
-    }
-  };
-
-  // Sequential Natural Voice Playback
-  const playSentenceSequence = async (idx: number) => {
-    if (!isSequenceActiveRef.current) return;
-    if (!activeLesson?.sentences || idx >= activeLesson.sentences.length) {
-      setIsPlaying(false);
-      setIsPaused(false);
-      setActiveSentenceId(null);
-      isSequenceActiveRef.current = false;
-      onLogActivity('Completed Listening Passage', '听完完整语篇', activeLesson.title);
-      return;
-    }
-
-    sequenceIndexRef.current = idx;
-    const sentence = activeLesson.sentences[idx];
-    setActiveSentenceId(sentence.id);
-
-    // Speak single sentence using high-quality neural voice
-    await playNaturalVoice(sentence.en, {
-      voiceId: activeVoiceId,
-      speed: playbackSpeed,
-      onEnd: () => {
-        if (!isSequenceActiveRef.current) return;
-        if (repeatSentenceMode) {
-          playSentenceSequence(idx);
-        } else {
-          // Natural slight pause between sentences (500ms)
-          setTimeout(() => {
-            if (isSequenceActiveRef.current) {
-              playSentenceSequence(idx + 1);
-            }
-          }, 500);
-        }
-      },
-      onError: () => {
-        setIsPlaying(false);
-        setIsPaused(false);
-      },
+    playListeningLesson(activeLesson, {
+      startIndex,
+      sourceMode: audioSourceMode,
+      mp3Url: loadedAudioUrl || undefined,
     });
   };
 
-  const handleSpeedChange = (speed: number) => {
-    setPlaybackSpeed(speed);
-    if (audioRef.current) {
-      audioRef.current.preservesPitch = true;
-      audioRef.current.playbackRate = speed;
+  const handlePause = () => {
+    pause();
+  };
+
+  const stopPlayback = () => {
+    stop();
+  };
+
+  const handleReplay = () => {
+    if (isCurrentLessonActive) {
+      replay();
+    } else {
+      playListeningLesson(activeLesson, {
+        startIndex: 0,
+        sourceMode: audioSourceMode,
+        mp3Url: loadedAudioUrl || undefined,
+      });
     }
-    // Update setting preference
+  };
+
+  const handleSpeedChange = (speed: number) => {
+    setSpeed(speed);
     onUpdateProgress({
       ...progress,
       settings: {
@@ -288,9 +181,9 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
     });
   };
 
-  // Switch voice selection and update setting
+  // Switch voice selection and immediately update centralized store
   const handleVoiceChange = (vId: VoiceProfileId) => {
-    setActiveVoiceId(vId);
+    setVoiceId(vId);
     onUpdateProgress({
       ...progress,
       settings: {
@@ -301,26 +194,24 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
   };
 
   // Click individual sentence to hear and repeat it
-  const handleSelectSentence = async (sentence: ListeningSentence) => {
-    setActiveSentenceId(sentence.id);
+  const handleSelectSentence = (sentence: ListeningSentence, index?: number) => {
+    const idx = index !== undefined
+      ? index
+      : activeLesson.sentences.findIndex((s) => s.id === sentence.id);
 
-    if (audioSourceMode === 'uploaded-mp3' && loadedAudioUrl && audioRef.current) {
-      audioRef.current.currentTime = sentence.startTime;
+    if (audioSourceMode === 'uploaded-mp3' && loadedAudioUrl) {
+      seek(sentence.startTime);
       if (!isPlaying) {
-        audioRef.current.play();
-        setIsPlaying(true);
-        setIsPaused(false);
+        playListeningLesson(activeLesson, {
+          startIndex: Math.max(0, idx),
+          sourceMode: 'uploaded-mp3',
+          mp3Url: loadedAudioUrl,
+        });
       }
     } else {
-      isSequenceActiveRef.current = false;
-      setIsPlaying(true);
-      setIsPaused(false);
-      await playNaturalVoice(sentence.en, {
-        voiceId: activeVoiceId,
-        speed: playbackSpeed,
-        onEnd: () => {
-          setIsPlaying(false);
-        },
+      playListeningLesson(activeLesson, {
+        startIndex: Math.max(0, idx),
+        sourceMode: 'ai-voice',
       });
     }
   };
@@ -468,8 +359,6 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
 
     setIsModalOpen(false);
   };
-
-  const selectedVoiceMeta = NATURAL_VOICE_OPTIONS.find((v) => v.id === activeVoiceId);
 
   return (
     <div className="space-y-6">
@@ -632,17 +521,6 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                 </div>
               )}
 
-              {/* Hidden HTML5 Audio Element for user uploaded MP3 */}
-              {loadedAudioUrl && (
-                <audio
-                  ref={audioRef}
-                  src={loadedAudioUrl}
-                  onTimeUpdate={handleTimeUpdate}
-                  onLoadedMetadata={handleLoadedMetadata}
-                  onEnded={handleAudioEnded}
-                />
-              )}
-
               {/* Playback Progress Indicator for Sentence Sequence */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs text-slate-500">
@@ -668,53 +546,91 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                 </div>
               </div>
 
-              {/* Comprehensive Audio Controls: Play, Pause, Resume, Stop, Replay, Repeat */}
+              {/* Comprehensive Audio Controls: Prev, -5s, Play, Pause, Next, +5s, Stop, Replay, Repeat */}
               <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
                 
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-1.5 sm:gap-2">
                   
-                  {/* Replay */}
+                  {/* Previous Sentence */}
                   <button
-                    onClick={handleReplay}
-                    className="p-2.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
-                    title="Replay from beginning"
+                    onClick={prevSentence}
+                    disabled={!isCurrentLessonActive || activeLesson.sentences.findIndex((s) => s.id === activeSentenceId) <= 0}
+                    className="p-2 text-slate-600 hover:text-slate-900 disabled:opacity-30 disabled:hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                    title="Previous sentence"
                   >
-                    <RotateCcw className="w-5 h-5" />
+                    <SkipBack className="w-4 h-4 fill-current" />
+                  </button>
+
+                  {/* Seek -5s */}
+                  <button
+                    onClick={() => seekRelative(-5)}
+                    className="px-2 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer text-xs font-semibold"
+                    title="Rewind 5 seconds"
+                  >
+                    -5s
                   </button>
 
                   {/* Play / Pause / Resume */}
                   {isPlaying ? (
                     <button
                       onClick={handlePause}
-                      className="p-3.5 bg-sky-500 hover:bg-sky-600 text-white rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer"
+                      className="p-3 bg-sky-500 hover:bg-sky-600 text-white rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer"
                       title="Pause"
                     >
-                      <Pause className="w-6 h-6" />
+                      <Pause className="w-5 h-5 fill-current" />
                     </button>
                   ) : (
                     <button
                       onClick={handlePlay}
-                      className="p-3.5 bg-sky-500 hover:bg-sky-600 text-white rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer"
+                      className="p-3 bg-sky-500 hover:bg-sky-600 text-white rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer"
                       title={isPaused ? 'Resume' : 'Play'}
                     >
-                      <Play className="w-6 h-6 fill-white" />
+                      <Play className="w-5 h-5 fill-current" />
                     </button>
                   )}
+
+                  {/* Next Sentence */}
+                  <button
+                    onClick={nextSentence}
+                    disabled={!isCurrentLessonActive || activeLesson.sentences.findIndex((s) => s.id === activeSentenceId) >= activeLesson.sentences.length - 1}
+                    className="p-2 text-slate-600 hover:text-slate-900 disabled:opacity-30 disabled:hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                    title="Next sentence"
+                  >
+                    <SkipForward className="w-4 h-4 fill-current" />
+                  </button>
+
+                  {/* Seek +5s */}
+                  <button
+                    onClick={() => seekRelative(5)}
+                    className="px-2 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer text-xs font-semibold"
+                    title="Forward 5 seconds"
+                  >
+                    +5s
+                  </button>
 
                   {/* Stop */}
                   {(isPlaying || isPaused) && (
                     <button
                       onClick={stopPlayback}
-                      className="p-2.5 text-slate-600 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                      className="p-2 text-slate-600 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
                       title="Stop playback"
                     >
-                      <Square className="w-5 h-5" />
+                      <Square className="w-4 h-4 fill-current" />
                     </button>
                   )}
 
+                  {/* Replay */}
+                  <button
+                    onClick={handleReplay}
+                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                    title="Replay from beginning"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+
                   {/* Repeat Sentence Mode */}
                   <button
-                    onClick={() => setRepeatSentenceMode(!repeatSentenceMode)}
+                    onClick={() => setRepeatMode(!repeatSentenceMode)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer ${
                       repeatSentenceMode
                         ? 'bg-sky-50 text-sky-700 border-sky-300 font-semibold'
@@ -723,7 +639,7 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                     title="Loop current sentence continuously"
                   >
                     <Repeat className="w-3.5 h-3.5" />
-                    <span>Repeat Sentence (单句循环)</span>
+                    <span>Repeat (单句循环)</span>
                   </button>
 
                 </div>
@@ -815,7 +731,7 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                     return (
                       <div
                         key={sent.id}
-                        onClick={() => handleSelectSentence(sent)}
+                        onClick={() => handleSelectSentence(sent, index)}
                         className={`p-4 rounded-2xl border transition-all cursor-pointer ${
                           isActive
                             ? 'bg-sky-50/80 border-sky-300 shadow-2xs ring-1 ring-sky-200'
@@ -840,7 +756,7 @@ export const ListeningView: React.FC<ListeningViewProps> = ({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleSelectSentence(sent);
+                                handleSelectSentence(sent, index);
                               }}
                               className={`p-2 rounded-xl transition-all cursor-pointer ${
                                 isActive 

@@ -28,9 +28,9 @@ export const TTSButton: React.FC<TTSButtonProps> = ({
   const { play, playParagraph, stop, isTextPlaying, playbackState } = useTTS();
 
   const isCurrentText = isTextPlaying(text);
-  const isPlaying = isCurrentText && playbackState.isPlaying;
-  const isPaused = isCurrentText && playbackState.isPaused;
-  const isLoading = isCurrentText && playbackState.isLoading;
+  const isPlaying = isCurrentText && playbackState.status === 'playing';
+  const isPaused = isCurrentText && playbackState.status === 'paused';
+  const isLoading = isCurrentText && playbackState.status === 'loading';
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();

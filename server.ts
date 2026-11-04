@@ -116,10 +116,13 @@ app.post('/api/tts', async (req: Request, res: Response): Promise<void> => {
     const cleanText = text.trim();
     const selectedVoice = VOICE_PROFILES[voiceId as VoiceId] || VOICE_PROFILES['us-female'];
 
+    console.log(`[Server TTS] Request: voiceId="${voiceId}" -> resolved to "${selectedVoice.id}" (VoiceName: ${selectedVoice.voiceName}, ${selectedVoice.accent}, ${selectedVoice.gender})`);
+
     // Check cache first
     const cacheKey = `${selectedVoice.id}:::${cleanText.toLowerCase()}`;
     const cached = audioCache.get(cacheKey);
     if (cached) {
+      console.log(`[Server TTS Cache] HIT for key: ${cacheKey}`);
       res.json({
         audioBase64: cached.base64,
         mimeType: cached.mimeType,
@@ -128,6 +131,7 @@ app.post('/api/tts', async (req: Request, res: Response): Promise<void> => {
       });
       return;
     }
+    console.log(`[Server TTS Cache] MISS for key: ${cacheKey}`);
 
     // If currently within rate-limit cooldown, seamlessly trigger browser fallback
     if (Date.now() < rateLimitUntil) {

@@ -11,7 +11,11 @@ import {
   Gauge,
   Zap,
   Clock,
-  Radio
+  Radio,
+  SkipBack,
+  SkipForward,
+  Headphones,
+  FileAudio
 } from 'lucide-react';
 import { useTTS } from '../context/TTSContext';
 import { NATURAL_VOICE_OPTIONS } from '../services/speech';
@@ -24,6 +28,10 @@ export const GlobalTTSPlayer: React.FC = () => {
     resume,
     stop,
     replay,
+    nextSentence,
+    prevSentence,
+    seek,
+    seekRelative,
     setSpeed,
     setVoiceId,
     currentVoiceOption,
@@ -33,22 +41,64 @@ export const GlobalTTSPlayer: React.FC = () => {
   const [isMinimized, setIsMinimized] = useState(false);
   const [showVoiceMenu, setShowVoiceMenu] = useState(false);
 
-  // If no audio active and not paused and not loading, do not show player
-  if (!playbackState.isPlaying && !playbackState.isPaused && !playbackState.isLoading && !playbackState.currentText) {
+  const isPlaying = playbackState.status === 'playing';
+  const isPaused = playbackState.status === 'paused';
+  const isLoading = playbackState.status === 'loading';
+
+  // If no audio active, paused or loading, do not show floating player
+  if (!isPlaying && !isPaused && !isLoading && !playbackState.currentText) {
     return null;
   }
 
   const speedOptions = [0.75, 1.0, 1.25, 1.5];
 
-  const displayText =
-    playbackState.activeSentence ||
-    playbackState.currentText ||
-    'Playing English audio...';
+  const displayText = playbackState.currentText || 'English learning audio';
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+  const progressPercent = playbackState.duration > 0
+    ? (playbackState.currentTime / playbackState.duration) * 100
+    : playbackState.totalSentences > 1
+      ? ((playbackState.currentSentenceIndex + 1) / playbackState.totalSentences) * 100
+      : isPlaying ? 100 : 0;
 
   return (
-    <aside aria-label="Global Audio Player" className="fixed bottom-4 right-4 z-50 max-w-md w-[calc(100vw-2rem)] sm:w-auto">
-      <div className="bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-xl border border-slate-700/60 p-3 sm:p-3.5 transition-all animate-in slide-in-from-bottom-3 duration-200">
+    <aside aria-label="Global Audio Player" className="fixed bottom-4 right-4 z-50 max-w-lg w-[calc(100vw-2rem)] sm:w-auto">
+      <div className="bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-slate-700/70 p-3 sm:p-4 transition-all animate-in slide-in-from-bottom-3 duration-200">
         
+        {/* Module Title & Badge Row (when playing from a module like Listening) */}
+        {playbackState.currentModule && (
+          <div className="flex items-center justify-between text-[11px] pb-2 mb-2 border-b border-slate-800 text-slate-300">
+            <div className="flex items-center gap-1.5 truncate">
+              {playbackState.audioSource === 'uploaded-mp3' ? (
+                <FileAudio className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              ) : (
+                <Headphones className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              )}
+              <span className="font-semibold text-slate-200 capitalize">
+                {playbackState.currentModule}
+              </span>
+              {playbackState.contentTitle && (
+                <>
+                  <span className="text-slate-500">·</span>
+                  <span className="truncate text-slate-400 font-medium">
+                    {playbackState.contentTitle}
+                  </span>
+                </>
+              )}
+            </div>
+
+            {playbackState.totalSentences > 1 && (
+              <span className="text-[10px] bg-slate-800 text-sky-400 px-2 py-0.5 rounded-full font-mono tabular-nums shrink-0 ml-2">
+                Sentence {playbackState.currentSentenceIndex + 1}/{playbackState.totalSentences}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Header row: Speaker info, source badge & controls */}
         <div className="flex items-center justify-between gap-3 pb-2 border-b border-slate-800">
           <div className="flex items-center gap-2 relative">
@@ -72,7 +122,7 @@ export const GlobalTTSPlayer: React.FC = () => {
 
               {/* Voice popover dropdown */}
               {showVoiceMenu && (
-                <div className="absolute bottom-full left-0 mb-2 w-56 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute bottom-full left-0 mb-2 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 animate-in fade-in zoom-in-95 duration-150">
                   <span className="text-[10px] uppercase font-bold text-slate-400 px-2 py-1 block">
                     Choose Natural Teacher Voice:
                   </span>
@@ -89,7 +139,10 @@ export const GlobalTTSPlayer: React.FC = () => {
                           : 'text-slate-300 hover:bg-slate-800'
                       }`}
                     >
-                      <span>{v.label}</span>
+                      <div className="flex flex-col">
+                        <span>{v.label}</span>
+                        <span className="text-[10px] text-slate-400">Voice: {v.voiceName}</span>
+                      </div>
                       <span className="text-[10px] opacity-75">{v.gender}</span>
                     </button>
                   ))}
@@ -98,29 +151,28 @@ export const GlobalTTSPlayer: React.FC = () => {
             </div>
 
             {/* Source indicator badge */}
-            {playbackState.source === 'cached' && (
+            {playbackState.audioSource === 'cached' && (
               <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded">
                 <Zap className="w-2.5 h-2.5" />
                 Cached
               </span>
             )}
-            {playbackState.source === 'fallback' && (
+            {playbackState.audioSource === 'fallback' && (
               <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded">
                 <Radio className="w-2.5 h-2.5" />
                 System Voice
               </span>
             )}
-            {playbackState.source === 'gemini' && !playbackState.isLoading && (
+            {playbackState.audioSource === 'gemini' && !isLoading && (
               <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.5 rounded">
                 <Sparkles className="w-2.5 h-2.5" />
-                Gemini
+                Gemini Neural
               </span>
             )}
-
-            {/* Paragraph progress if multiple sentences */}
-            {playbackState.totalSentences > 1 && (
-              <span className="text-[11px] text-slate-400 tabular-nums">
-                {playbackState.currentSentenceIndex + 1}/{playbackState.totalSentences}
+            {playbackState.audioSource === 'uploaded-mp3' && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded">
+                <FileAudio className="w-2.5 h-2.5" />
+                MP3 Audio
               </span>
             )}
           </div>
@@ -149,19 +201,36 @@ export const GlobalTTSPlayer: React.FC = () => {
         {!isMinimized && (
           <div className="pt-2.5 space-y-2.5">
             {/* Live sentence text */}
-            <div className="bg-slate-950/60 rounded-lg p-2 border border-slate-800/80 max-h-20 overflow-y-auto">
-              <p className="text-xs text-slate-200 leading-snug line-clamp-3 font-normal">
+            <div className="bg-slate-950/60 rounded-lg p-2.5 border border-slate-800/80 max-h-24 overflow-y-auto">
+              <p className="text-xs text-slate-200 leading-relaxed font-normal">
                 {displayText}
               </p>
             </div>
 
+            {/* Progress scrubber bar */}
+            <div className="space-y-1">
+              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className="bg-sky-500 h-1.5 rounded-full transition-all duration-200"
+                  style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                />
+              </div>
+
+              {playbackState.duration > 0 && (
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 px-0.5">
+                  <span>{formatTime(playbackState.currentTime)}</span>
+                  <span>{formatTime(playbackState.duration)}</span>
+                </div>
+              )}
+            </div>
+
             {/* Queue / Cooldown Banner if waiting on rate-limited queue */}
-            {playbackState.isLoading && queueState.cooldownRemainingSeconds > 0 && (
+            {isLoading && queueState.cooldownRemainingSeconds > 0 && (
               <div className="bg-amber-950/40 border border-amber-500/30 rounded-lg p-2 flex items-center justify-between gap-2 text-xs text-amber-200">
                 <div className="flex items-center gap-1.5 min-w-0">
                   <Clock className="w-3.5 h-3.5 shrink-0 text-amber-400 animate-spin" />
                   <span className="truncate">
-                    Gemini Free-Tier safe interval: <strong>{queueState.cooldownRemainingSeconds}s</strong>
+                    Safe interval delay: <strong>{queueState.cooldownRemainingSeconds}s</strong>
                   </span>
                 </div>
                 <button
@@ -176,10 +245,32 @@ export const GlobalTTSPlayer: React.FC = () => {
             )}
 
             {/* Playback Controls & Speed */}
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-2">
               {/* Main Playback Buttons */}
-              <div className="flex items-center gap-1.5">
-                {playbackState.isPaused ? (
+              <div className="flex items-center gap-1">
+                {/* Previous Sentence */}
+                <button
+                  type="button"
+                  onClick={prevSentence}
+                  disabled={playbackState.totalSentences <= 1 || playbackState.currentSentenceIndex === 0}
+                  className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="Previous sentence"
+                >
+                  <SkipBack className="w-4 h-4 fill-current" />
+                </button>
+
+                {/* Seek -5s */}
+                <button
+                  type="button"
+                  onClick={() => seekRelative(-5)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer text-[10px] font-semibold"
+                  title="Rewind 5 seconds"
+                >
+                  -5s
+                </button>
+
+                {/* Play / Pause Toggle */}
+                {isPaused ? (
                   <button
                     type="button"
                     onClick={resume}
@@ -199,34 +290,57 @@ export const GlobalTTSPlayer: React.FC = () => {
                   </button>
                 )}
 
+                {/* Next Sentence */}
+                <button
+                  type="button"
+                  onClick={nextSentence}
+                  disabled={playbackState.totalSentences <= 1 || playbackState.currentSentenceIndex >= playbackState.totalSentences - 1}
+                  className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="Next sentence"
+                >
+                  <SkipForward className="w-4 h-4 fill-current" />
+                </button>
+
+                {/* Seek +5s */}
+                <button
+                  type="button"
+                  onClick={() => seekRelative(5)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer text-[10px] font-semibold"
+                  title="Forward 5 seconds"
+                >
+                  +5s
+                </button>
+
+                {/* Stop */}
                 <button
                   type="button"
                   onClick={stop}
-                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors cursor-pointer"
+                  className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
                   title="Stop playback"
                 >
-                  <Square className="w-4 h-4 fill-current" />
+                  <Square className="w-3.5 h-3.5 fill-current" />
                 </button>
 
+                {/* Replay */}
                 <button
                   type="button"
                   onClick={replay}
-                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors cursor-pointer"
-                  title="Replay text"
+                  className="p-1.5 text-slate-400 hover:text-slate-200 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="Replay from start"
                 >
-                  <RotateCcw className="w-4 h-4" />
+                  <RotateCcw className="w-3.5 h-3.5" />
                 </button>
               </div>
 
               {/* Speed Buttons */}
               <div className="flex items-center gap-1 bg-slate-800/80 p-0.5 rounded-lg border border-slate-700/60">
-                <Gauge className="w-3 h-3 text-slate-400 ml-1.5 mr-0.5" />
+                <Gauge className="w-3 h-3 text-slate-400 ml-1 mr-0.5" />
                 {speedOptions.map((s) => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => setSpeed(s)}
-                    className={`px-1.5 py-0.5 text-[11px] font-semibold rounded cursor-pointer transition-colors ${
+                    className={`px-1.5 py-0.5 text-[10px] font-semibold rounded cursor-pointer transition-colors ${
                       playbackState.speed === s
                         ? 'bg-sky-500 text-white shadow-2xs'
                         : 'text-slate-400 hover:text-slate-200'

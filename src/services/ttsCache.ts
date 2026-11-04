@@ -1,17 +1,22 @@
 /**
  * Persistent Audio Cache using Browser IndexedDB
- * Caches synthesized audio base64/blobs permanently across browser reloads
- * to prevent hitting Gemini Free-Tier rate limits on repeated listening.
+ * Caches synthesized audio base64/blobs permanently across browser reloads.
+ * Uses strict cache key including provider, model, voiceId, accent, and speed
+ * to guarantee that selecting a different voice never reuses cached audio of another voice.
  */
 
 const DB_NAME = 'MyEnglish_TTS_DB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'audio_cache';
 
 export interface CachedAudioRecord {
   key: string;
   cleanText: string;
+  provider: string;
+  model: string;
   voiceId: string;
+  accent: string;
+  speed: number;
   audioBase64: string;
   mimeType: string;
   createdAt: number;
@@ -55,11 +60,25 @@ function getDB(): Promise<IDBDatabase> {
 }
 
 /**
- * Generates a unique cache key based on voice persona and normalized text
+ * Generates a unique cache key incorporating:
+ * - Text content
+ * - TTS Provider (e.g. 'gemini')
+ * - Model ID (e.g. 'gemini-3.8-flash-lite-tts')
+ * - Voice ID (e.g. 'us-female', 'us-male', 'uk-female', 'uk-male')
+ * - Accent ('en-US' | 'en-GB')
+ * - Speaking speed
  */
-export function buildAudioCacheKey(text: string, voiceId: string): string {
+export function buildAudioCacheKey(
+  text: string,
+  voiceId: string,
+  provider = 'gemini',
+  model = 'gemini-3.8-flash-lite-tts',
+  speed = 1.0,
+  accent = 'en-US'
+): string {
   const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
-  return `${voiceId}:::${normalized}`;
+  const speedFormatted = Number(speed || 1.0).toFixed(2);
+  return `${provider}:::${model}:::${voiceId}:::${accent}:::${speedFormatted}:::${normalized}`;
 }
 
 /**
@@ -76,7 +95,6 @@ export async function getAudioFromCache(key: string): Promise<CachedAudioRecord 
       request.onsuccess = () => {
         const record = request.result as CachedAudioRecord | undefined;
         if (record) {
-          // Asynchronously update last accessed timestamp
           updateLastAccessed(db, key).catch(() => {});
           resolve(record);
         } else {
@@ -117,7 +135,11 @@ export async function saveAudioToCache(
   cleanText: string,
   voiceId: string,
   audioBase64: string,
-  mimeType = 'audio/wav'
+  mimeType = 'audio/wav',
+  provider = 'gemini',
+  model = 'gemini-3.8-flash-lite-tts',
+  speed = 1.0,
+  accent = 'en-US'
 ): Promise<void> {
   try {
     const db = await getDB();
@@ -126,7 +148,11 @@ export async function saveAudioToCache(
     const record: CachedAudioRecord = {
       key,
       cleanText,
+      provider,
+      model,
       voiceId,
+      accent,
+      speed,
       audioBase64,
       mimeType,
       createdAt: Date.now(),

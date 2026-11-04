@@ -42,7 +42,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     availableSystemVoices,
     preferredSystemVoice,
     setPreferredSystemVoice,
-    queueState
+    queueState,
+    setVoiceId,
+    setSpeed
   } = useTTS();
 
   const [settings, setSettings] = useState<UserSettings>({
@@ -69,6 +71,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     e?.stopPropagation();
     stopCurrentAudio();
     setPreviewingVoiceId(voiceId);
+
+    // Make sure voice is selected and previewed with its explicit voiceId
+    setVoiceId(voiceId);
 
     await playNaturalVoice(previewText, {
       voiceId,
@@ -101,11 +106,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const selectVoice = (voiceId: VoiceProfileId) => {
     const matched = NATURAL_VOICE_OPTIONS.find((v) => v.id === voiceId);
-    setSettings({
+    const updated = {
       ...settings,
       voiceId,
       voiceGender: matched?.gender || 'female',
       voiceAccent: matched?.accent || 'en-US',
+    };
+    setSettings(updated);
+    setVoiceId(voiceId);
+    onUpdateProgress({
+      ...progress,
+      settings: updated,
+    });
+  };
+
+  const selectSpeed = (rate: number) => {
+    const updated = { ...settings, speechRate: rate };
+    setSettings(updated);
+    setSpeed(rate);
+    onUpdateProgress({
+      ...progress,
+      settings: updated,
     });
   };
 
@@ -267,7 +288,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 key={rate}
                 type="button"
-                onClick={() => setSettings({ ...settings, speechRate: rate })}
+                onClick={() => selectSpeed(rate)}
                 className={`py-2 text-xs font-semibold rounded-xl border transition-all cursor-pointer ${
                   settings.speechRate === rate
                     ? 'bg-sky-500 text-white border-sky-600 shadow-xs'
